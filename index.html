@@ -42,23 +42,7 @@
 
   <p id="version"></p>
 
-  <!-- Panel después de cada foto: otra página, repetir o listo -->
-  <div id="siguiente">
-    <p id="sigMensaje"></p>
-    <div class="filaSig">
-      <label class="sigBoton" id="sigRepetir">
-        🔄 Repetir
-        <input type="file" accept="image/*" capture="environment" class="entradaFoto" data-accion="repetir" hidden>
-      </label>
-      <label class="sigBoton sigPrincipal">
-        📷 Otra página
-        <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
-      </label>
-      <button class="sigBoton" id="sigListo">✓ Listo</button>
-    </div>
-  </div>
-
-  <!-- Editor de esquinas y lados -->
+  <!-- Editor de esquinas y lados (se abre después de cada foto) -->
   <div id="editor">
     <p id="edMensaje"></p>
     <p id="edAyuda">Arrastra las esquinas o cualquier lado del recuadro azul</p>
@@ -66,7 +50,13 @@
     <div class="filaEd">
       <button id="edCancelar">✕ Cancelar</button>
       <button id="edTodo">⬜ Toda la foto</button>
+    </div>
+    <div class="filaEd">
       <button id="edListo">✓ Listo</button>
+      <label id="edOtra">
+        📷 Listo y otra
+        <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
+      </label>
     </div>
   </div>
 

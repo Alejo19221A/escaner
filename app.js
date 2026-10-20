@@ -1,4 +1,4 @@
-const VERSION = '1.2';
+const VERSION = '1.3';
 const DPI = 200;            // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;  // menor = acepta fotos más borrosas (se puede ajustar)
 
@@ -34,8 +34,8 @@ setTimeout(() => {
     '⚠️ El recorte automático no cargó. Puedes escanear igual, pero sin recortar la hoja.';
 }, 30000);
 
-// ---------- Ayudantes para ahorrar memoria ----------
-function aBlob(canvas, calidad = 0.95) {
+// ---------- Ayudantes ----------
+function aBlob(canvas, calidad = 0.92) {
   return new Promise(r => canvas.toBlob(r, 'image/jpeg', calidad));
 }
 async function aCanvas(blob) {
@@ -48,6 +48,18 @@ async function aCanvas(blob) {
   return c;
 }
 function liberar(c) { if (c) { c.width = 0; c.height = 0; } }
+
+// Copia reducida de una imagen (rápido, lo hace el navegador)
+function copiaReducida(origen, maxLado) {
+  const esc = Math.min(1, maxLado / Math.max(origen.width, origen.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(origen.width * esc);
+  c.height = Math.round(origen.height * esc);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(origen, 0, 0, c.width, c.height);
+  return { canvas: c, escala: esc };
+}
 
 // ---------- 2. Tipo de documento: normal o paciente ----------
 function marcarTipo() {
@@ -64,7 +76,7 @@ document.querySelectorAll('.tipo').forEach(boton => {
 });
 marcarTipo();
 
-// ---------- 3. Tomar fotos con la cámara del celular (o de la galería) ----------
+// ---------- 3. Tomar fotos (cámara del celular o galería) ----------
 // Las tareas pesadas van en fila, una después de otra
 let cola = Promise.resolve();
 function enCola(tarea) {
@@ -72,43 +84,44 @@ function enCola(tarea) {
   return cola;
 }
 
-// Todos los botones de foto (Escanear, Galería, Otra página, Repetir) usan esto
+// Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
 document.querySelectorAll('.entradaFoto').forEach(entrada => {
   entrada.addEventListener('change', (e) => {
     const archivo = e.target.files[0];
-    const accion = e.target.dataset.accion || 'nueva';
     e.target.value = '';
     if (!archivo) return;
-    ocultarSiguiente();
-    enCola(() => manejarFoto(archivo, accion));
+    enCola(() => manejarFoto(archivo));
   });
 });
 
-async function manejarFoto(archivo, accion) {
+async function manejarFoto(archivo) {
   await mostrarCargando(true);
   let base = null;
   try {
     const img = await cargarImagen(archivo);
-    base = reducirImagen(img);
+    base = copiaReducida(img, 3000).canvas; // 3000 px alcanzan para 200 DPI
     URL.revokeObjectURL(img.src);
 
-    // Recorte automático; el editor se abre SOLO si no encontró la hoja
-    let esquinas = null;
-    if (opencvListo) {
-      esquinas = detectarEsquinas(base);
-      if (!esquinas) {
-        mostrarCargando(false);
-        esquinas = await abrirEditor(base, esquinasPorDefecto(base),
-          '✋ No encontré la hoja: ajusta el recuadro');
-        if (!esquinas) { estado.textContent = 'Foto descartada'; mostrarSiguiente(null); return; }
-        await mostrarCargando(true);
-      }
+    if (!opencvListo) { // plan B: sin recorte
+      await agregarPagina(base, null);
+      return;
     }
 
-    const nitidez = esquinas ? medirNitidez(base, esquinas) : 999;
-    const indice = (accion === 'repetir' && paginas.length) ? paginas.length - 1 : null;
-    const pagina = await agregarPagina(base, esquinas, indice);
-    mostrarSiguiente(pagina, nitidez < UMBRAL_NITIDEZ);
+    // Propuesta automática, afinada en los bordes
+    let detectadas = detectarEsquinas(base);
+    if (detectadas) detectadas = refinarEsquinas(base, detectadas);
+    const borrosa = detectadas && medirNitidez(base, detectadas) < UMBRAL_NITIDEZ;
+
+    let mensaje = detectadas ? '✅ Revisa el recorte y toca Listo' : '✋ No encontré la hoja: ajusta el recuadro';
+    if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
+
+    // Siempre se muestra el editor para confirmar
+    mostrarCargando(false);
+    const esquinas = await abrirEditor(base, detectadas || esquinasPorDefecto(base), mensaje, true, borrosa);
+    if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
+
+    await mostrarCargando(true);
+    await agregarPagina(base, esquinas);
   } catch (err) {
     console.error(err);
     estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
@@ -118,22 +131,15 @@ async function manejarFoto(archivo, accion) {
   }
 }
 
-// Agrega una página (o reemplaza la de "indice" si se está repitiendo)
-async function agregarPagina(base, esquinas, indice = null) {
-  const pagina = { baseBlob: await aBlob(base), esquinas };
+async function agregarPagina(base, esquinas) {
+  const pagina = { baseBlob: await aBlob(base, 0.85), esquinas };
   await procesarPagina(pagina, base);
-  if (indice !== null) {
-    URL.revokeObjectURL(paginas[indice].finalURL);
-    paginas[indice] = pagina;
-  } else {
-    paginas.push(pagina);
-  }
-  const numero = paginas.indexOf(pagina) + 1;
+  paginas.push(pagina);
   estado.textContent = esquinas
-    ? `✅ Página ${numero} lista (${pagina.formato})`
-    : `📄 Página ${numero} lista (sin recorte)`;
+    ? `✅ Página ${paginas.length} lista (${pagina.formato})`
+    : `📄 Página ${paginas.length} lista (sin recorte)`;
   mostrarPaginas();
-  if (tipoDoc === 'paciente' && paginas[0] === pagina) leerPagina(pagina); // lee la cédula en segundo plano
+  if (tipoDoc === 'paciente' && paginas.length === 1) leerPagina(pagina); // lee la cédula en segundo plano
   return pagina;
 }
 
@@ -145,20 +151,7 @@ function cargarImagen(archivo) {
   });
 }
 
-// Reduce solo si la foto es gigante (celulares con más memoria trabajan con más resolución)
-function reducirImagen(img) {
-  const max = (navigator.deviceMemory || 4) >= 4 ? 4000 : 3000;
-  const esc = Math.min(1, max / Math.max(img.width, img.height));
-  const base = document.createElement('canvas');
-  base.width = Math.round(img.width * esc);
-  base.height = Math.round(img.height * esc);
-  const ctx = base.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, 0, 0, base.width, base.height);
-  return base;
-}
-
-// Recorta, endereza y aplica el filtro a una página
+// Recorta y endereza directo al tamaño final, y aplica el filtro
 async function procesarPagina(pag, base) {
   const rec = pag.esquinas ? enderezar(base, pag.esquinas) : base;
   pag.recBlob = await aBlob(rec);
@@ -192,34 +185,14 @@ function medirNitidez(base, esquinas) {
   return valor;
 }
 
-// ---------- Panel después de cada foto ----------
-const panelSig = document.getElementById('siguiente');
-
-function mostrarSiguiente(pagina, borrosa = false) {
-  const numero = pagina ? paginas.indexOf(pagina) + 1 : 0;
-  document.getElementById('sigMensaje').textContent = !pagina
-    ? '¿Quieres tomar otra foto?'
-    : borrosa
-      ? `⚠️ La página ${numero} salió borrosa. Puedes repetirla.`
-      : `✅ Página ${numero} lista${pagina.formato ? ' (' + pagina.formato + ')' : ''}`;
-  document.getElementById('sigRepetir').style.display = borrosa ? '' : 'none';
-  panelSig.classList.add('visible');
-  document.body.classList.add('conPanel');
-}
-
-function ocultarSiguiente() {
-  panelSig.classList.remove('visible');
-  document.body.classList.remove('conPanel');
-}
-document.getElementById('sigListo').addEventListener('click', ocultarSiguiente);
-
 // ---------- 4. Detectar la hoja automáticamente ----------
 function detectarEsquinas(base, tamano = 800) {
-  const src = cv.imread(base);
-  const escala = tamano / Math.max(src.cols, src.rows);
-  const peque = new cv.Mat(), rgb = new cv.Mat(), gris = new cv.Mat(), hsv = new cv.Mat();
-  cv.resize(src, peque, new cv.Size(Math.round(src.cols * escala), Math.round(src.rows * escala)),
-    0, 0, cv.INTER_AREA);
+  // Primero se achica la foto (rápido) y solo esa copia pequeña pasa a OpenCV
+  const { canvas: chico, escala } = copiaReducida(base, tamano);
+  const peque = cv.imread(chico);
+  liberar(chico);
+
+  const rgb = new cv.Mat(), gris = new cv.Mat(), hsv = new cv.Mat();
   cv.cvtColor(peque, rgb, cv.COLOR_RGBA2RGB);
   cv.cvtColor(rgb, gris, cv.COLOR_RGB2GRAY);
   cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
@@ -239,8 +212,7 @@ function detectarEsquinas(base, tamano = 800) {
   cv.dilate(mapaBordes, mapaBordes, k5);
 
   const candidatos = [];
-  const tamCierre = Math.max(9, Math.round(21 * tamano / 800)) | 1; // siempre impar
-  const kCierre = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(tamCierre, tamCierre));
+  const kCierre = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(21, 21));
   const k3 = cv.Mat.ones(3, 3, cv.CV_8U);
 
   // Forma A: la hoja es una zona clara
@@ -268,14 +240,19 @@ function detectarEsquinas(base, tamano = 800) {
     bordes.delete();
   }
 
-  // Elegir el candidato con mejor puntaje
+  // Vuelta rápida a todos; el cálculo pesado (contraste) solo a los 3 mejores
+  const mejores = candidatos
+    .map(q => ({ q, p: puntaje(q, gris, mapaBordes, areaTotal, false) }))
+    .filter(c => c.p > 0)
+    .sort((a, b) => b.p - a.p)
+    .slice(0, 3);
   let mejor = null, mejorPuntaje = 0;
-  for (const q of candidatos) {
-    const p = puntaje(q, gris, mapaBordes, areaTotal);
-    if (p > mejorPuntaje) { mejorPuntaje = p; mejor = q; }
+  for (const c of mejores) {
+    const p = puntaje(c.q, gris, mapaBordes, areaTotal, true);
+    if (p > mejorPuntaje) { mejorPuntaje = p; mejor = c.q; }
   }
 
-  [src, peque, rgb, gris, hsv, realzado, mapaBordes, k5, claro, blanco, bajo, alto, kCierre, k3]
+  [peque, rgb, gris, hsv, realzado, mapaBordes, k5, claro, blanco, bajo, alto, kCierre, k3]
     .forEach(m => m.delete());
   if (!mejor) return null;
 
@@ -286,7 +263,7 @@ function detectarEsquinas(base, tamano = 800) {
   })));
 }
 
-// Saca figuras de 4 lados de las manchas más grandes
+// Saca una figura de 4 lados de las 2 manchas más grandes
 function cuadrilateros(binaria, areaTotal) {
   const conMarco = new cv.Mat();
   cv.copyMakeBorder(binaria, conMarco, 2, 2, 2, 2, cv.BORDER_CONSTANT, new cv.Scalar(0));
@@ -303,7 +280,7 @@ function cuadrilateros(binaria, areaTotal) {
   lista.sort((a, b) => b.area - a.area);
 
   const resultado = [];
-  for (const { i } of lista.slice(0, 3)) {
+  for (const { i } of lista.slice(0, 2)) {
     const c = contornos.get(i);
     const casco = new cv.Mat();
     cv.convexHull(c, casco, false, true);
@@ -320,9 +297,11 @@ function cuadrilateros(binaria, areaTotal) {
       }
       aprox.delete();
     }
-    if (q) resultado.push(q);
-    const rect = cv.minAreaRect(casco);
-    resultado.push(cv.RotatedRect.points(rect).map(p => ({ x: p.x - 2, y: p.y - 2 })));
+    if (!q) { // si no quedó de 4 lados, el rectángulo que mejor la encierra
+      const rect = cv.minAreaRect(casco);
+      q = cv.RotatedRect.points(rect).map(p => ({ x: p.x - 2, y: p.y - 2 }));
+    }
+    resultado.push(q);
     c.delete(); casco.delete();
   }
   [conMarco, contornos, jerarquia].forEach(m => m.delete());
@@ -330,7 +309,7 @@ function cuadrilateros(binaria, areaTotal) {
 }
 
 // Califica qué tanto parece una hoja
-function puntaje(q, gris, mapaBordes, areaTotal) {
+function puntaje(q, gris, mapaBordes, areaTotal, conContraste) {
   const o = ordenarEsquinas(q);
 
   // 1. Ángulos cercanos a 90°
@@ -370,6 +349,9 @@ function puntaje(q, gris, mapaBordes, areaTotal) {
   const soporte = aciertos / total;
   if (soporte < 0.45) return 0;
 
+  const base = soporte * soporte * Math.sqrt(fraccion) * factorAngulos;
+  if (!conContraste) return base;
+
   // 4. Contraste: lo de adentro (papel) suele ser más claro que lo de afuera
   const mascara = cv.Mat.zeros(gris.rows, gris.cols, cv.CV_8U);
   const poli = cv.matFromArray(4, 1, cv.CV_32SC2,
@@ -389,9 +371,85 @@ function puntaje(q, gris, mapaBordes, areaTotal) {
 
   const contraste = mDentro - mFuera;
   if (contraste < -15) return 0;
-  const factorContraste = 1 + Math.max(0, contraste) / 40;
+  return base * (1 + Math.max(0, contraste) / 40);
+}
 
-  return soporte * soporte * Math.sqrt(fraccion) * factorAngulos * factorContraste;
+// Afina las esquinas: busca la orilla real de cada lado y traza una línea recta exacta
+function refinarEsquinas(base, esquinas) {
+  try {
+    const { canvas: c, escala: esc } = copiaReducida(base, 1600);
+    const src = cv.imread(c), gris = new cv.Mat(), bordes = new cv.Mat();
+    liberar(c);
+    cv.cvtColor(src, gris, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gris, gris, new cv.Size(3, 3), 0);
+    cv.Canny(gris, bordes, 30, 90);
+    const W = bordes.cols, H = bordes.rows, datos = bordes.data;
+
+    const p = esquinas.map(q => ({ x: q.x * esc, y: q.y * esc }));
+    const banda = Math.max(6, Math.round(Math.max(W, H) * 0.015)); // cuánto puede corregir
+    const muestras = 60;
+    const lineas = [];
+
+    for (let i = 0; i < 4; i++) {
+      const a = p[i], b = p[(i + 1) % 4];
+      const largo = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const nx = -(b.y - a.y) / largo, ny = (b.x - a.x) / largo;
+      const puntos = [];
+      for (let k = 4; k < muestras - 4; k++) { // sin las puntas, que suelen estar dobladas
+        const t = k / muestras;
+        const cx = a.x + (b.x - a.x) * t, cy = a.y + (b.y - a.y) * t;
+        let encontrado = null;
+        for (let d = 0; d <= banda && encontrado === null; d++) {
+          for (const s of (d === 0 ? [0] : [d, -d])) {
+            const x = Math.round(cx + nx * s), y = Math.round(cy + ny * s);
+            if (x >= 0 && y >= 0 && x < W && y < H && datos[y * W + x]) { encontrado = s; break; }
+          }
+        }
+        if (encontrado !== null) puntos.push({ x: cx + nx * encontrado, y: cy + ny * encontrado });
+      }
+      lineas.push(puntos.length >= (muestras - 8) * 0.4 ? ajustarLinea(puntos) : null);
+    }
+    [src, gris, bordes].forEach(m => m.delete());
+
+    // Cada esquina queda donde se cruzan sus dos lados
+    const nuevas = p.map((q, i) => {
+      const l1 = lineas[(i + 3) % 4], l2 = lineas[i];
+      if (!l1 || !l2) return q;
+      const cruce = interseccion(l1, l2);
+      if (!cruce || Math.hypot(cruce.x - q.x, cruce.y - q.y) > banda * 2) return q;
+      return {
+        x: Math.min(W, Math.max(0, cruce.x)),
+        y: Math.min(H, Math.max(0, cruce.y))
+      };
+    });
+    return nuevas.map(q => ({ x: q.x / esc, y: q.y / esc }));
+  } catch (err) {
+    console.error(err);
+    return esquinas; // si algo falla, se queda la propuesta original
+  }
+}
+
+// Línea recta que mejor pasa por varios puntos
+function ajustarLinea(puntos) {
+  const n = puntos.length;
+  const mx = puntos.reduce((s, p) => s + p.x, 0) / n;
+  const my = puntos.reduce((s, p) => s + p.y, 0) / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of puntos) {
+    sxx += (p.x - mx) ** 2;
+    syy += (p.y - my) ** 2;
+    sxy += (p.x - mx) * (p.y - my);
+  }
+  const angulo = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  return { x: mx, y: my, dx: Math.cos(angulo), dy: Math.sin(angulo) };
+}
+
+// Punto donde se cruzan dos líneas
+function interseccion(l1, l2) {
+  const det = l1.dx * l2.dy - l1.dy * l2.dx;
+  if (Math.abs(det) < 1e-6) return null;
+  const t = ((l2.x - l1.x) * l2.dy - (l2.y - l1.y) * l2.dx) / det;
+  return { x: l1.x + t * l1.dx, y: l1.y + t * l1.dy };
 }
 
 function ordenarEsquinas(p) {
@@ -421,18 +479,21 @@ function esquinasCompletas(base) {
 }
 
 // ---------- 5. Editor: mover esquinas y lados (con lupa) ----------
-function abrirEditor(base, esquinasIniciales, mensaje) {
+function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false, alerta = false) {
   return new Promise(resolve => {
     const editor = document.getElementById('editor');
     const lienzo = document.getElementById('lienzo');
     const ctx = lienzo.getContext('2d');
-    document.getElementById('edMensaje').textContent = mensaje;
+    const edMensaje = document.getElementById('edMensaje');
+    edMensaje.textContent = mensaje;
+    edMensaje.classList.toggle('alerta', alerta);
+    document.getElementById('edOtra').style.display = permitirOtra ? '' : 'none';
     editor.classList.add('visible');
 
     // Tamaño en pantalla
     const dpr = window.devicePixelRatio || 1;
     const proporcion = base.width / base.height;
-    const maxW = window.innerWidth - 20, maxH = window.innerHeight * 0.65;
+    const maxW = window.innerWidth - 20, maxH = window.innerHeight * 0.6;
     const w = Math.min(maxW, maxH * proporcion), h = w / proporcion;
     lienzo.style.width = w + 'px';
     lienzo.style.height = h + 'px';
@@ -622,8 +683,13 @@ function abrirEditor(base, esquinasIniciales, mensaje) {
     document.getElementById('edTodo').onclick = () => { pts = esquinasCompletas(base); dibujar(); };
     document.getElementById('edCancelar').onclick = () => cerrar(null);
     document.getElementById('edListo').onclick = () => cerrar(ordenarEsquinas(pts));
+    // "Listo y otra": guarda esta página y el mismo toque abre la cámara para la siguiente
+    document.getElementById('edOtra').onclick = () => cerrar(ordenarEsquinas(pts));
 
+    let cerrado = false;
     function cerrar(resultado) {
+      if (cerrado) return;
+      cerrado = true;
       editor.classList.remove('visible');
       liberar(vista);
       resolve(resultado);
@@ -633,13 +699,20 @@ function abrirEditor(base, esquinasIniciales, mensaje) {
   });
 }
 
-// ---------- 6. Enderezar la hoja ----------
+// ---------- 6. Enderezar la hoja, directo al tamaño final (200 DPI) ----------
 function enderezar(base, esquinas) {
   const [ai, ad, bd, bi] = esquinas;
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const ancho = Math.round(Math.max(dist(ai, ad), dist(bi, bd)));
-  const alto = Math.round(Math.max(dist(ai, bi), dist(ad, bd)));
+  let ancho = Math.max(dist(ai, ad), dist(bi, bd));
+  let alto = Math.max(dist(ai, bi), dist(ad, bd));
   if (ancho < 20 || alto < 20) return base;
+
+  // Tamaño final según el formato de la hoja
+  const f = formatoDePagina(ancho, alto);
+  const maxLado = f.nombre === 'Proporcional' ? 2400 : Math.round(Math.max(f.w, f.h) / 25.4 * DPI);
+  const esc = Math.min(1, maxLado / Math.max(ancho, alto));
+  ancho = Math.round(ancho * esc);
+  alto = Math.round(alto * esc);
 
   const src = cv.imread(base);
   const origen = cv.matFromArray(4, 1, cv.CV_32FC2,
@@ -649,7 +722,7 @@ function enderezar(base, esquinas) {
   const M = cv.getPerspectiveTransform(origen, destino);
   const plana = new cv.Mat();
   cv.warpPerspective(src, plana, M, new cv.Size(ancho, alto),
-    cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
+    cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
 
   const salida = document.createElement('canvas');
   cv.imshow(salida, plana);
@@ -678,19 +751,13 @@ function formatoDePagina(ancho, alto) {
     : { nombre: mejor.nombre, w: mejor.h, h: mejor.w }; // hoja acostada
 }
 
-// ---------- 8. Filtros: Color, B/N, Original (a 200 DPI) ----------
+// ---------- 8. Filtros: Color, B/N, Original ----------
 async function aplicarModo(pag, rec) {
-  // Tamaño final: 200 DPI según el formato (tiquetes y otros: máximo 2400 px de largo)
+  // Si la página no se recortó, se reduce aquí a un tamaño razonable
   const f = formatoDePagina(rec.width, rec.height);
   const maxLado = f.nombre === 'Proporcional' ? 2400 : Math.round(Math.max(f.w, f.h) / 25.4 * DPI);
-  const esc = Math.min(1, maxLado / Math.max(rec.width, rec.height));
-
-  const c = document.createElement('canvas');
-  c.width = Math.round(rec.width * esc);
-  c.height = Math.round(rec.height * esc);
+  const { canvas: c } = copiaReducida(rec, maxLado);
   const ctx = c.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(rec, 0, 0, c.width, c.height);
 
   if (modo === 'color') { blanquearColor(ctx, c); afilar(c); }
   if (modo === 'bn') { afilar(c); blancoNegro(c); }
@@ -819,7 +886,6 @@ function moverPagina(i, direccion) {
 
 async function editarPagina(i) {
   if (!opencvListo) return;
-  ocultarSiguiente();
   const pag = paginas[i];
   await mostrarCargando(true);
   const base = await aCanvas(pag.baseBlob);
@@ -848,7 +914,6 @@ function borrarPagina(i) {
 function empezarDeNuevo() {
   paginas.forEach(p => URL.revokeObjectURL(p.finalURL));
   paginas.length = 0;
-  ocultarSiguiente();
   mostrarPaginas();
   estado.textContent = '✅ Listo para escanear';
 }
@@ -901,8 +966,9 @@ function leerPagina(pag) {
   if (!pag.lectura) {
     pag.lectura = (async () => {
       const rec = await aCanvas(pag.recBlob);
-      const c = prepararParaOCR(rec);
+      const { canvas: c } = copiaReducida(rec, 2000);
       liberar(rec);
+      blancoNegro(c); // el OCR lee mejor en blanco y negro
       const trabajador = await obtenerOCR();
       const { data } = await trabajador.recognize(c);
       liberar(c);
@@ -915,19 +981,6 @@ function leerPagina(pag) {
     });
   }
   return pag.lectura;
-}
-
-// Tamaño adecuado y blanco/negro: el OCR lee mejor así
-function prepararParaOCR(rec) {
-  const esc = Math.min(1, 2000 / Math.max(rec.width, rec.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(rec.width * esc);
-  c.height = Math.round(rec.height * esc);
-  const ctx = c.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(rec, 0, 0, c.width, c.height);
-  blancoNegro(c);
-  return c;
 }
 
 function limpiarNombre(texto) {
@@ -1023,7 +1076,6 @@ function puedeCompartir() {
 }
 
 document.getElementById('pdf').addEventListener('click', async () => {
-  ocultarSiguiente();
   const esPaciente = tipoDoc === 'paciente';
   document.getElementById('camposNormal').style.display = esPaciente ? 'none' : 'block';
   document.getElementById('camposPaciente').style.display = esPaciente ? 'block' : 'none';
