@@ -1,10 +1,14 @@
-// Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, lectura }
+const VERSION = '1.1';
+const DPI = 200; // calidad de cada hoja en el PDF (como un escáner de oficina)
+
+// Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
 const paginas = [];
 let modo = 'color';
-let tipoDoc = localStorage.getItem('tipoDoc') || 'normal'; // 'normal' o 'paciente' (recuerda la última)
+let tipoDoc = localStorage.getItem('tipoDoc') || 'normal'; // 'normal' o 'paciente'
 const estado = document.getElementById('estado');
 const camara = document.getElementById('camara');
+document.getElementById('version').textContent = `Versión ${VERSION}`;
 
 // ---------- 1. Esperar a que OpenCV cargue (sin bloquear la app) ----------
 let opencvListo = false;
@@ -31,7 +35,7 @@ setTimeout(() => {
 }, 30000);
 
 // ---------- Ayudantes para ahorrar memoria ----------
-function aBlob(canvas, calidad = 0.92) {
+function aBlob(canvas, calidad = 0.95) {
   return new Promise(r => canvas.toBlob(r, 'image/jpeg', calidad));
 }
 async function aCanvas(blob) {
@@ -60,15 +64,22 @@ document.querySelectorAll('.tipo').forEach(boton => {
 });
 marcarTipo();
 
-// ---------- 3. Tomar fotos (en fila, para poder tomar varias seguidas) ----------
+// ---------- 3. Agregar páginas (desde la galería o la cámara en vivo) ----------
+// Las tareas pesadas van en fila, una después de otra
 let cola = Promise.resolve();
+function enCola(tarea) {
+  cola = cola.then(tarea).catch(err => console.error(err));
+  return cola;
+}
+
 camara.addEventListener('change', (e) => {
   const archivo = e.target.files[0];
   e.target.value = '';
   if (!archivo) return;
-  cola = cola.then(() => manejarFoto(archivo));
+  enCola(() => manejarFoto(archivo));
 });
 
+// Foto de la galería: detecta la hoja y abre el editor para revisar
 async function manejarFoto(archivo) {
   await mostrarCargando(true);
   let base = null;
@@ -76,27 +87,20 @@ async function manejarFoto(archivo) {
     const img = await cargarImagen(archivo);
     base = reducirImagen(img);
     URL.revokeObjectURL(img.src);
-    const pagina = { baseBlob: await aBlob(base), esquinas: null };
+    let esquinas = null;
 
     if (opencvListo) {
       const detectadas = detectarEsquinas(base);
       mostrarCargando(false);
-      const esquinas = await abrirEditor(base, detectadas || esquinasPorDefecto(base),
+      esquinas = await abrirEditor(base, detectadas || esquinasPorDefecto(base),
         detectadas ? '✅ Hoja detectada: revisa el recuadro'
                    : '✋ No encontré la hoja: ajusta el recuadro',
         true);
       if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
-      pagina.esquinas = esquinas;
       await mostrarCargando(true);
     }
 
-    await procesarPagina(pagina, base);
-    paginas.push(pagina);
-    estado.textContent = opencvListo
-      ? `✅ Página ${paginas.length} agregada`
-      : `📄 Página ${paginas.length} agregada (sin recorte automático)`;
-    mostrarPaginas();
-    if (paginas.length === 1 && tipoDoc === 'paciente') leerPagina(paginas[0]); // lee la cédula en segundo plano
+    await agregarPagina(base, esquinas);
   } catch (err) {
     console.error(err);
     estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
@@ -104,6 +108,19 @@ async function manejarFoto(archivo) {
     liberar(base);
     mostrarCargando(false);
   }
+}
+
+// Agrega una página con su recorte (la usan la galería y la cámara en vivo)
+async function agregarPagina(base, esquinas) {
+  const pagina = { baseBlob: await aBlob(base), esquinas };
+  await procesarPagina(pagina, base);
+  paginas.push(pagina);
+  estado.textContent = esquinas
+    ? `✅ Página ${paginas.length} agregada (${pagina.formato})`
+    : `📄 Página ${paginas.length} agregada (sin recorte)`;
+  mostrarPaginas();
+  if (paginas.length === 1 && tipoDoc === 'paciente') leerPagina(paginas[0]); // lee la cédula en segundo plano
+  return pagina;
 }
 
 function cargarImagen(archivo) {
@@ -114,8 +131,9 @@ function cargarImagen(archivo) {
   });
 }
 
+// Reduce solo si la foto es gigante (celulares con más memoria trabajan con más resolución)
 function reducirImagen(img) {
-  const max = 3000; // buena nitidez sin exagerar el peso
+  const max = (navigator.deviceMemory || 4) >= 4 ? 4000 : 3000;
   const esc = Math.min(1, max / Math.max(img.width, img.height));
   const base = document.createElement('canvas');
   base.width = Math.round(img.width * esc);
@@ -136,9 +154,10 @@ async function procesarPagina(pag, base) {
 }
 
 // ---------- 4. Detectar la hoja automáticamente ----------
-function detectarEsquinas(base) {
+// tamano: resolución de trabajo (800 para fotos, menos para la cámara en vivo)
+function detectarEsquinas(base, tamano = 800) {
   const src = cv.imread(base);
-  const escala = 800 / Math.max(src.cols, src.rows);
+  const escala = tamano / Math.max(src.cols, src.rows);
   const peque = new cv.Mat(), rgb = new cv.Mat(), gris = new cv.Mat(), hsv = new cv.Mat();
   cv.resize(src, peque, new cv.Size(Math.round(src.cols * escala), Math.round(src.rows * escala)),
     0, 0, cv.INTER_AREA);
@@ -161,7 +180,8 @@ function detectarEsquinas(base) {
   cv.dilate(mapaBordes, mapaBordes, k5);
 
   const candidatos = [];
-  const kCierre = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(21, 21));
+  const tamCierre = Math.max(9, Math.round(21 * tamano / 800)) | 1; // siempre impar
+  const kCierre = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(tamCierre, tamCierre));
   const k3 = cv.Mat.ones(3, 3, cv.CV_8U);
 
   // Forma A: la hoja es una zona clara
@@ -545,7 +565,7 @@ function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false) {
     document.getElementById('edCancelar').onclick = () => cerrar(null);
     document.getElementById('edListo').onclick = () => cerrar(ordenarEsquinas(pts));
     document.getElementById('edOtra').onclick = () => {
-      camara.click(); // abre la cámara de una vez para la siguiente página
+      camara.click(); // abre la galería/cámara de una vez para la siguiente página
       cerrar(ordenarEsquinas(pts));
     };
 
@@ -583,21 +603,50 @@ function enderezar(base, esquinas) {
   return salida;
 }
 
-// ---------- 7. Filtros: Color, B/N, Original ----------
+// ---------- 7. Tamaño de hoja: Carta, Oficio, A4 o proporcional ----------
+const FORMATOS = [
+  { nombre: 'Carta', w: 216, h: 279 },
+  { nombre: 'A4', w: 210, h: 297 },
+  { nombre: 'Oficio', w: 216, h: 330 }
+];
+
+// Reconoce el tamaño por la proporción (alto / ancho) de la hoja recortada
+function formatoDePagina(ancho, alto) {
+  const proporcion = Math.max(ancho, alto) / Math.min(ancho, alto);
+  let mejor = null, diferencia = 0.035; // tolerancia de 3,5 %
+  for (const f of FORMATOS) {
+    const d = Math.abs(proporcion - f.h / f.w) / (f.h / f.w);
+    if (d < diferencia) { diferencia = d; mejor = f; }
+  }
+  if (!mejor) return { nombre: 'Proporcional', w: 210, h: 210 * alto / ancho };
+  return alto >= ancho
+    ? { nombre: mejor.nombre, w: mejor.w, h: mejor.h }
+    : { nombre: mejor.nombre, w: mejor.h, h: mejor.w }; // hoja acostada
+}
+
+// ---------- 8. Filtros: Color, B/N, Original (a 200 DPI) ----------
 async function aplicarModo(pag, rec) {
+  // Tamaño final: 200 DPI según el formato (tiquetes y otros: máximo 2400 px de largo)
+  const f = formatoDePagina(rec.width, rec.height);
+  const maxLado = f.nombre === 'Proporcional' ? 2400 : Math.round(Math.max(f.w, f.h) / 25.4 * DPI);
+  const esc = Math.min(1, maxLado / Math.max(rec.width, rec.height));
+
   const c = document.createElement('canvas');
-  c.width = rec.width;
-  c.height = rec.height;
+  c.width = Math.round(rec.width * esc);
+  c.height = Math.round(rec.height * esc);
   const ctx = c.getContext('2d');
-  ctx.drawImage(rec, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(rec, 0, 0, c.width, c.height);
+
   if (modo === 'color') { blanquearColor(ctx, c); afilar(c); }
   if (modo === 'bn') { afilar(c); blancoNegro(c); }
-  const blob = await aBlob(c, 0.9);
+  const blob = await aBlob(c, 0.88);
   if (pag.finalURL) URL.revokeObjectURL(pag.finalURL);
   pag.finalBlob = blob;
   pag.finalURL = URL.createObjectURL(blob);
   pag.ancho = c.width;
   pag.alto = c.height;
+  pag.formato = f.nombre;
   liberar(c);
 }
 
@@ -682,7 +731,7 @@ document.querySelectorAll('.modo').forEach(boton => {
   });
 });
 
-// ---------- 8. Mostrar, ordenar y borrar páginas ----------
+// ---------- 9. Mostrar, ordenar y borrar páginas ----------
 function mostrarPaginas() {
   const contenedor = document.getElementById('paginas');
   contenedor.innerHTML = '';
@@ -690,7 +739,7 @@ function mostrarPaginas() {
     contenedor.innerHTML += `
       <div class="pagina">
         <img src="${pag.finalURL}" onclick="editarPagina(${i})">
-        <span>${i + 1}</span>
+        <span>${i + 1} · ${pag.formato || ''}</span>
         <button class="borrar" onclick="borrarPagina(${i})">✕</button>
         <div class="mover">
           <button onclick="moverPagina(${i}, -1)" ${i === 0 ? 'disabled' : ''}>◀</button>
@@ -757,24 +806,23 @@ async function mostrarCargando(visible) {
   if (visible) await new Promise(r => setTimeout(r, 50)); // deja que se vea el aviso
 }
 
-// ---------- 9. Crear el PDF ajustado a cada hoja ----------
+// ---------- 10. Crear el PDF con el tamaño de cada hoja ----------
 async function crearPDF() {
   const { jsPDF } = window.jspdf;
   let doc;
   for (let i = 0; i < paginas.length; i++) {
     const pag = paginas[i];
-    const w = 210;                        // ancho de una hoja A4 en mm
-    const h = w * pag.alto / pag.ancho;   // alto proporcional a la hoja
-    const orientacion = w > h ? 'l' : 'p';
-    if (i === 0) doc = new jsPDF({ unit: 'mm', format: [w, h], orientation: orientacion });
-    else doc.addPage([w, h], orientacion);
+    const f = formatoDePagina(pag.ancho, pag.alto);
+    const orientacion = f.w > f.h ? 'l' : 'p';
+    if (i === 0) doc = new jsPDF({ unit: 'mm', format: [f.w, f.h], orientation: orientacion });
+    else doc.addPage([f.w, f.h], orientacion);
     const datos = new Uint8Array(await pag.finalBlob.arrayBuffer());
-    doc.addImage(datos, 'JPEG', 0, 0, w, h);
+    doc.addImage(datos, 'JPEG', 0, 0, f.w, f.h);
   }
   return doc.output('blob');
 }
 
-// ---------- 10. Leer la cédula con OCR (todo dentro del celular) ----------
+// ---------- 11. Leer la cédula con OCR (todo dentro del celular) ----------
 let trabajadorOCR = null;
 const rutaCompleta = r => new URL(r, location.href).href;
 
@@ -868,7 +916,7 @@ function extraerDatos(texto) {
   return { cedula, nombre };
 }
 
-// ---------- 11. Ventana de guardar ----------
+// ---------- 12. Ventana de guardar ----------
 const dlg = document.getElementById('dialogo');
 const dlgTitulo = document.getElementById('dlgTitulo');
 const dlgCedula = document.getElementById('dlgCedula');

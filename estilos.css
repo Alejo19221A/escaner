@@ -1,11 +1,14 @@
 body { font-family: sans-serif; margin: 0; padding: 16px; background: #f2f4f7; text-align: center; }
 h1 { color: #1a3d6d; margin-bottom: 4px; }
 #estado { color: #555; min-height: 22px; margin: 6px 0 12px; }
+#version { color: #999; font-size: 12px; margin-top: 20px; }
 
 .boton { display: block; width: 100%; box-sizing: border-box; padding: 16px; margin: 10px 0;
          font-size: 18px; border: none; border-radius: 12px; background: #1a73e8;
          color: white; cursor: pointer; }
 .boton:disabled { background: #aaa !important; }
+.botonSec { display: block; padding: 10px; margin: 0 0 10px; color: #1a73e8;
+            font-size: 15px; text-decoration: underline; cursor: pointer; }
 #pdf { background: #188038; }
 #nuevo { display: none; background: white; color: #d93025; border: 2px solid #d93025; font-size: 16px; }
 
@@ -26,7 +29,7 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 .pagina { position: relative; width: 45%; }
 .pagina img { width: 100%; border-radius: 8px; box-shadow: 0 2px 6px #0003; cursor: pointer; }
 .pagina span { position: absolute; top: 6px; left: 6px; background: #000a; color: white;
-               padding: 2px 8px; border-radius: 6px; }
+               padding: 2px 8px; border-radius: 6px; font-size: 13px; }
 .borrar { position: absolute; top: 4px; right: 4px; background: #d93025; color: white;
           border: none; border-radius: 50%; width: 30px; height: 30px; font-size: 16px; }
 .mover { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
@@ -36,12 +39,36 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 .mover button:disabled { opacity: 0.3; }
 
 #cargando { display: none; position: fixed; inset: 0; background: #0007;
-            align-items: center; justify-content: center; z-index: 30; }
+            align-items: center; justify-content: center; z-index: 40; }
 #cargando.visible { display: flex; }
 #cargando div { background: white; padding: 20px 30px; border-radius: 12px; font-size: 18px; }
 
+/* Cámara en vivo */
+#camaraVivo { display: none; position: fixed; inset: 0; background: #000; z-index: 22;
+              flex-direction: column; align-items: center; justify-content: center;
+              padding: 8px; box-sizing: border-box; }
+#camaraVivo.visible { display: flex; }
+#vivoMensaje { color: white; font-size: 17px; margin: 0 0 8px; min-height: 22px; }
+#vivoMarco { position: relative; }
+#video, #capa { position: absolute; top: 0; left: 0; }
+#video { object-fit: fill; }
+#destello { position: absolute; inset: 0; background: white; opacity: 0; pointer-events: none;
+            transition: opacity 0.15s; }
+#destello.activo { opacity: 0.8; transition: none; }
+.filaVivo { display: flex; align-items: center; justify-content: space-around; width: 100%;
+            max-width: 420px; margin-top: 14px; }
+.filaVivo button { background: #333; color: white; border: none; border-radius: 12px;
+                   padding: 12px 14px; font-size: 16px; min-width: 80px; }
+.filaVivo button.activo { background: #1a73e8; }
+#vivoLinterna.activo { background: #f9ab00; color: black; }
+#vivoDisparar { width: 72px; height: 72px; min-width: 72px; border-radius: 50%;
+                background: white; border: 5px solid #888; padding: 0; }
+#vivoDisparar:active { background: #ddd; }
+#vivoTerminar { margin-top: 14px; width: 100%; max-width: 420px; padding: 14px; font-size: 17px;
+                background: #188038; color: white; border: none; border-radius: 12px; }
+
 /* Editor de esquinas y lados */
-#editor { display: none; position: fixed; inset: 0; background: #111; z-index: 20;
+#editor { display: none; position: fixed; inset: 0; background: #111; z-index: 24;
           flex-direction: column; align-items: center; justify-content: center;
           padding: 10px; box-sizing: border-box; }
 #editor.visible { display: flex; }
@@ -57,7 +84,7 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #edOtra { background: #1a73e8; }
 
 /* Ventana de guardar */
-#dialogo { display: none; position: fixed; inset: 0; background: #0009; z-index: 25;
+#dialogo { display: none; position: fixed; inset: 0; background: #0009; z-index: 26;
            align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
 #dialogo.visible { display: flex; }
 #dialogo .caja { background: white; border-radius: 16px; padding: 20px; width: 100%;

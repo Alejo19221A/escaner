@@ -19,9 +19,11 @@
     <button class="tipo" data-tipo="paciente">🧪 Paciente (lee cédula)</button>
   </div>
 
-  <label class="boton" id="btnEscanear">
-    📷 Escanear página
-    <input type="file" accept="image/*" capture="environment" id="camara" hidden>
+  <!-- Escanear: cámara en vivo (principal) o foto de la galería -->
+  <button class="boton" id="btnEscanear">📷 Escanear</button>
+  <label class="botonSec">
+    🖼️ Usar foto de la galería
+    <input type="file" accept="image/*" id="camara" hidden>
   </label>
 
   <div class="modos">
@@ -34,6 +36,24 @@
 
   <button class="boton" id="pdf" disabled>💾 Guardar PDF</button>
   <button class="boton" id="nuevo">🗑️ Empezar de nuevo</button>
+
+  <p id="version"></p>
+
+  <!-- Cámara en vivo -->
+  <div id="camaraVivo">
+    <p id="vivoMensaje">Apunta a la hoja</p>
+    <div id="vivoMarco">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="capa"></canvas>
+      <div id="destello"></div>
+    </div>
+    <div class="filaVivo">
+      <button id="vivoAuto">🤖 Auto</button>
+      <button id="vivoDisparar" aria-label="Tomar foto"></button>
+      <button id="vivoLinterna">🔦</button>
+    </div>
+    <button id="vivoTerminar">✓ Terminar (<span id="vivoContador">0</span>)</button>
+  </div>
 
   <!-- Editor de esquinas y lados -->
   <div id="editor">
@@ -55,13 +75,11 @@
     <div class="caja">
       <h2>💾 Guardar documento</h2>
 
-      <!-- Documento normal: solo el nombre del archivo -->
       <div id="camposNormal">
         <label for="dlgTitulo">Nombre del archivo</label>
         <input id="dlgTitulo" autocomplete="off">
       </div>
 
-      <!-- Paciente: cédula (OCR) y nombre -->
       <div id="camposPaciente">
         <p id="dlgLectura"></p>
         <label for="dlgCedula">Cédula del paciente</label>
@@ -83,5 +101,6 @@
   <div id="cargando"><div>⏳ Procesando...</div></div>
 
   <script src="app.js"></script>
+  <script src="camara.js"></script>
 </body>
 </html>
