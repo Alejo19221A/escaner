@@ -1,0 +1,80 @@
+body { font-family: sans-serif; margin: 0; padding: 16px; background: #f2f4f7; text-align: center; }
+h1 { color: #1a3d6d; margin-bottom: 4px; }
+#estado { color: #555; min-height: 22px; margin: 6px 0 12px; }
+
+.boton { display: block; width: 100%; box-sizing: border-box; padding: 16px; margin: 10px 0;
+         font-size: 18px; border: none; border-radius: 12px; background: #1a73e8;
+         color: white; cursor: pointer; }
+.boton:disabled { background: #aaa !important; }
+#pdf { background: #188038; }
+#nuevo { display: none; background: white; color: #d93025; border: 2px solid #d93025; font-size: 16px; }
+
+/* Tipo de documento */
+.tipos { display: flex; gap: 8px; margin: 4px 0 10px; }
+.tipo { flex: 1; padding: 12px 4px; font-size: 15px; border: 2px solid #1a3d6d;
+        background: white; color: #1a3d6d; border-radius: 10px; }
+.tipo.activo { background: #1a3d6d; color: white; }
+
+/* Modos de color */
+.modos { display: flex; gap: 8px; margin: 10px 0; }
+.modo { flex: 1; padding: 12px 4px; font-size: 15px; border: 2px solid #1a73e8;
+        background: white; color: #1a73e8; border-radius: 10px; }
+.modo.activo { background: #1a73e8; color: white; }
+
+/* Miniaturas de páginas */
+#paginas { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 16px 0; }
+.pagina { position: relative; width: 45%; }
+.pagina img { width: 100%; border-radius: 8px; box-shadow: 0 2px 6px #0003; cursor: pointer; }
+.pagina span { position: absolute; top: 6px; left: 6px; background: #000a; color: white;
+               padding: 2px 8px; border-radius: 6px; }
+.borrar { position: absolute; top: 4px; right: 4px; background: #d93025; color: white;
+          border: none; border-radius: 50%; width: 30px; height: 30px; font-size: 16px; }
+.mover { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.mover small { color: #777; }
+.mover button { width: 38px; height: 32px; border: 2px solid #1a73e8; background: white;
+                color: #1a73e8; border-radius: 8px; font-size: 14px; }
+.mover button:disabled { opacity: 0.3; }
+
+#cargando { display: none; position: fixed; inset: 0; background: #0007;
+            align-items: center; justify-content: center; z-index: 30; }
+#cargando.visible { display: flex; }
+#cargando div { background: white; padding: 20px 30px; border-radius: 12px; font-size: 18px; }
+
+/* Editor de esquinas y lados */
+#editor { display: none; position: fixed; inset: 0; background: #111; z-index: 20;
+          flex-direction: column; align-items: center; justify-content: center;
+          padding: 10px; box-sizing: border-box; }
+#editor.visible { display: flex; }
+#edMensaje { color: white; margin: 0 0 4px; }
+#edAyuda { color: #aaa; font-size: 13px; margin: 0 0 10px; }
+#lienzo { touch-action: none; }
+.filaEd { display: flex; gap: 8px; width: 100%; margin-top: 10px; }
+.filaEd button { flex: 1; padding: 14px 4px; font-size: 16px; border: none;
+                 border-radius: 10px; color: white; }
+#edCancelar { background: #d93025; }
+#edTodo { background: #555; }
+#edListo { background: #188038; }
+#edOtra { background: #1a73e8; }
+
+/* Ventana de guardar */
+#dialogo { display: none; position: fixed; inset: 0; background: #0009; z-index: 25;
+           align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+#dialogo.visible { display: flex; }
+#dialogo .caja { background: white; border-radius: 16px; padding: 20px; width: 100%;
+                 max-width: 420px; text-align: left; }
+#dialogo h2 { margin: 0 0 6px; color: #1a3d6d; font-size: 20px; }
+#dialogo label { display: block; margin: 14px 0 4px; font-weight: bold; color: #333; }
+#dialogo input { width: 100%; box-sizing: border-box; padding: 12px; font-size: 18px;
+                 border: 2px solid #ccc; border-radius: 10px; }
+#dialogo input:focus { border-color: #1a73e8; outline: none; }
+#camposNormal, #camposPaciente { display: none; }
+#dlgLectura { color: #555; margin: 0; }
+.aviso { color: #b06000; font-size: 14px; margin: 12px 0 4px; }
+#dlgArchivo { font-size: 13px; color: #555; word-break: break-all; margin: 12px 0; }
+.filaDlg { display: flex; gap: 8px; }
+.filaDlg button, #dlgCompartir { flex: 1; padding: 14px; font-size: 16px; border: none;
+                                 border-radius: 10px; color: white; }
+#dlgCancelar { background: #777; }
+#dlgGuardar { background: #188038; }
+#dlgCompartir { display: block; width: 100%; margin-top: 8px; background: #1a73e8; }
+#dialogo button:disabled { background: #bbb; }

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Escáner</title>
+  <link rel="stylesheet" href="estilos.css">
+  <script src="libs/jspdf.umd.min.js"></script>
+  <script src="libs/tesseract/tesseract.min.js"></script>
+  <script async src="libs/opencv.js"></script>
+</head>
+<body>
+  <h1>📄 Escáner</h1>
+  <p id="estado">⏳ Cargando...</p>
+
+  <!-- Tipo de documento -->
+  <div class="tipos">
+    <button class="tipo activo" data-tipo="normal">📄 Documento normal</button>
+    <button class="tipo" data-tipo="paciente">🧪 Paciente (lee cédula)</button>
+  </div>
+
+  <label class="boton" id="btnEscanear">
+    📷 Escanear página
+    <input type="file" accept="image/*" capture="environment" id="camara" hidden>
+  </label>
+
+  <div class="modos">
+    <button class="modo activo" data-modo="color">🎨 Color</button>
+    <button class="modo" data-modo="bn">⚫ B/N</button>
+    <button class="modo" data-modo="original">📷 Original</button>
+  </div>
+
+  <div id="paginas"></div>
+
+  <button class="boton" id="pdf" disabled>💾 Guardar PDF</button>
+  <button class="boton" id="nuevo">🗑️ Empezar de nuevo</button>
+
+  <!-- Editor de esquinas y lados -->
+  <div id="editor">
+    <p id="edMensaje"></p>
+    <p id="edAyuda">Arrastra las esquinas o cualquier lado del recuadro azul</p>
+    <canvas id="lienzo"></canvas>
+    <div class="filaEd">
+      <button id="edCancelar">✕ Cancelar</button>
+      <button id="edTodo">⬜ Toda la foto</button>
+    </div>
+    <div class="filaEd">
+      <button id="edListo">✓ Listo</button>
+      <button id="edOtra">📷 Listo y otra</button>
+    </div>
+  </div>
+
+  <!-- Ventana para guardar -->
+  <div id="dialogo">
+    <div class="caja">
+      <h2>💾 Guardar documento</h2>
+
+      <!-- Documento normal: solo el nombre del archivo -->
+      <div id="camposNormal">
+        <label for="dlgTitulo">Nombre del archivo</label>
+        <input id="dlgTitulo" autocomplete="off">
+      </div>
+
+      <!-- Paciente: cédula (OCR) y nombre -->
+      <div id="camposPaciente">
+        <p id="dlgLectura"></p>
+        <label for="dlgCedula">Cédula del paciente</label>
+        <input id="dlgCedula" inputmode="numeric" autocomplete="off">
+        <label for="dlgNombre">Nombre del paciente</label>
+        <input id="dlgNombre" autocomplete="off" autocapitalize="characters">
+        <p class="aviso">⚠️ Revisa que la cédula coincida con el documento</p>
+      </div>
+
+      <p id="dlgArchivo"></p>
+      <div class="filaDlg">
+        <button id="dlgCancelar">Cancelar</button>
+        <button id="dlgGuardar">💾 Guardar</button>
+      </div>
+      <button id="dlgCompartir">📤 Compartir</button>
+    </div>
+  </div>
+
+  <div id="cargando"><div>⏳ Procesando...</div></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
