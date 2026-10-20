@@ -1,5 +1,6 @@
-const VERSION = '1.1';
-const DPI = 200; // calidad de cada hoja en el PDF (como un escáner de oficina)
+const VERSION = '1.2';
+const DPI = 200;            // calidad de cada hoja en el PDF (como un escáner de oficina)
+const UMBRAL_NITIDEZ = 40;  // menor = acepta fotos más borrosas (se puede ajustar)
 
 // Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
@@ -7,7 +8,6 @@ const paginas = [];
 let modo = 'color';
 let tipoDoc = localStorage.getItem('tipoDoc') || 'normal'; // 'normal' o 'paciente'
 const estado = document.getElementById('estado');
-const camara = document.getElementById('camara');
 document.getElementById('version').textContent = `Versión ${VERSION}`;
 
 // ---------- 1. Esperar a que OpenCV cargue (sin bloquear la app) ----------
@@ -64,7 +64,7 @@ document.querySelectorAll('.tipo').forEach(boton => {
 });
 marcarTipo();
 
-// ---------- 3. Agregar páginas (desde la galería o la cámara en vivo) ----------
+// ---------- 3. Tomar fotos con la cámara del celular (o de la galería) ----------
 // Las tareas pesadas van en fila, una después de otra
 let cola = Promise.resolve();
 function enCola(tarea) {
@@ -72,35 +72,43 @@ function enCola(tarea) {
   return cola;
 }
 
-camara.addEventListener('change', (e) => {
-  const archivo = e.target.files[0];
-  e.target.value = '';
-  if (!archivo) return;
-  enCola(() => manejarFoto(archivo));
+// Todos los botones de foto (Escanear, Galería, Otra página, Repetir) usan esto
+document.querySelectorAll('.entradaFoto').forEach(entrada => {
+  entrada.addEventListener('change', (e) => {
+    const archivo = e.target.files[0];
+    const accion = e.target.dataset.accion || 'nueva';
+    e.target.value = '';
+    if (!archivo) return;
+    ocultarSiguiente();
+    enCola(() => manejarFoto(archivo, accion));
+  });
 });
 
-// Foto de la galería: detecta la hoja y abre el editor para revisar
-async function manejarFoto(archivo) {
+async function manejarFoto(archivo, accion) {
   await mostrarCargando(true);
   let base = null;
   try {
     const img = await cargarImagen(archivo);
     base = reducirImagen(img);
     URL.revokeObjectURL(img.src);
-    let esquinas = null;
 
+    // Recorte automático; el editor se abre SOLO si no encontró la hoja
+    let esquinas = null;
     if (opencvListo) {
-      const detectadas = detectarEsquinas(base);
-      mostrarCargando(false);
-      esquinas = await abrirEditor(base, detectadas || esquinasPorDefecto(base),
-        detectadas ? '✅ Hoja detectada: revisa el recuadro'
-                   : '✋ No encontré la hoja: ajusta el recuadro',
-        true);
-      if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
-      await mostrarCargando(true);
+      esquinas = detectarEsquinas(base);
+      if (!esquinas) {
+        mostrarCargando(false);
+        esquinas = await abrirEditor(base, esquinasPorDefecto(base),
+          '✋ No encontré la hoja: ajusta el recuadro');
+        if (!esquinas) { estado.textContent = 'Foto descartada'; mostrarSiguiente(null); return; }
+        await mostrarCargando(true);
+      }
     }
 
-    await agregarPagina(base, esquinas);
+    const nitidez = esquinas ? medirNitidez(base, esquinas) : 999;
+    const indice = (accion === 'repetir' && paginas.length) ? paginas.length - 1 : null;
+    const pagina = await agregarPagina(base, esquinas, indice);
+    mostrarSiguiente(pagina, nitidez < UMBRAL_NITIDEZ);
   } catch (err) {
     console.error(err);
     estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
@@ -110,16 +118,22 @@ async function manejarFoto(archivo) {
   }
 }
 
-// Agrega una página con su recorte (la usan la galería y la cámara en vivo)
-async function agregarPagina(base, esquinas) {
+// Agrega una página (o reemplaza la de "indice" si se está repitiendo)
+async function agregarPagina(base, esquinas, indice = null) {
   const pagina = { baseBlob: await aBlob(base), esquinas };
   await procesarPagina(pagina, base);
-  paginas.push(pagina);
+  if (indice !== null) {
+    URL.revokeObjectURL(paginas[indice].finalURL);
+    paginas[indice] = pagina;
+  } else {
+    paginas.push(pagina);
+  }
+  const numero = paginas.indexOf(pagina) + 1;
   estado.textContent = esquinas
-    ? `✅ Página ${paginas.length} agregada (${pagina.formato})`
-    : `📄 Página ${paginas.length} agregada (sin recorte)`;
+    ? `✅ Página ${numero} lista (${pagina.formato})`
+    : `📄 Página ${numero} lista (sin recorte)`;
   mostrarPaginas();
-  if (paginas.length === 1 && tipoDoc === 'paciente') leerPagina(paginas[0]); // lee la cédula en segundo plano
+  if (tipoDoc === 'paciente' && paginas[0] === pagina) leerPagina(pagina); // lee la cédula en segundo plano
   return pagina;
 }
 
@@ -153,8 +167,53 @@ async function procesarPagina(pag, base) {
   if (rec !== base) liberar(rec);
 }
 
+// Mide qué tan nítida está la hoja (si es muy bajo, salió borrosa)
+function medirNitidez(base, esquinas) {
+  if (!opencvListo) return 999;
+  const xs = esquinas.map(p => p.x), ys = esquinas.map(p => p.y);
+  const x0 = Math.max(0, Math.min(...xs)), y0 = Math.max(0, Math.min(...ys));
+  const w = Math.min(base.width, Math.max(...xs)) - x0;
+  const h = Math.min(base.height, Math.max(...ys)) - y0;
+  if (w < 50 || h < 50) return 999;
+  const esc = Math.min(1, 1000 / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * esc);
+  c.height = Math.round(h * esc);
+  c.getContext('2d').drawImage(base, x0, y0, w, h, 0, 0, c.width, c.height);
+  const src = cv.imread(c), gris = new cv.Mat(), lap = new cv.Mat();
+  const media = new cv.Mat(), desv = new cv.Mat();
+  cv.cvtColor(src, gris, cv.COLOR_RGBA2GRAY);
+  cv.Laplacian(gris, lap, cv.CV_64F);
+  cv.meanStdDev(lap, media, desv);
+  const valor = desv.data64F[0] ** 2;
+  [src, gris, lap, media, desv].forEach(m => m.delete());
+  liberar(c);
+  console.log('Nitidez:', Math.round(valor));
+  return valor;
+}
+
+// ---------- Panel después de cada foto ----------
+const panelSig = document.getElementById('siguiente');
+
+function mostrarSiguiente(pagina, borrosa = false) {
+  const numero = pagina ? paginas.indexOf(pagina) + 1 : 0;
+  document.getElementById('sigMensaje').textContent = !pagina
+    ? '¿Quieres tomar otra foto?'
+    : borrosa
+      ? `⚠️ La página ${numero} salió borrosa. Puedes repetirla.`
+      : `✅ Página ${numero} lista${pagina.formato ? ' (' + pagina.formato + ')' : ''}`;
+  document.getElementById('sigRepetir').style.display = borrosa ? '' : 'none';
+  panelSig.classList.add('visible');
+  document.body.classList.add('conPanel');
+}
+
+function ocultarSiguiente() {
+  panelSig.classList.remove('visible');
+  document.body.classList.remove('conPanel');
+}
+document.getElementById('sigListo').addEventListener('click', ocultarSiguiente);
+
 // ---------- 4. Detectar la hoja automáticamente ----------
-// tamano: resolución de trabajo (800 para fotos, menos para la cámara en vivo)
 function detectarEsquinas(base, tamano = 800) {
   const src = cv.imread(base);
   const escala = tamano / Math.max(src.cols, src.rows);
@@ -362,19 +421,18 @@ function esquinasCompletas(base) {
 }
 
 // ---------- 5. Editor: mover esquinas y lados (con lupa) ----------
-function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false) {
+function abrirEditor(base, esquinasIniciales, mensaje) {
   return new Promise(resolve => {
     const editor = document.getElementById('editor');
     const lienzo = document.getElementById('lienzo');
     const ctx = lienzo.getContext('2d');
     document.getElementById('edMensaje').textContent = mensaje;
-    document.getElementById('edOtra').style.display = permitirOtra ? '' : 'none';
     editor.classList.add('visible');
 
     // Tamaño en pantalla
     const dpr = window.devicePixelRatio || 1;
     const proporcion = base.width / base.height;
-    const maxW = window.innerWidth - 20, maxH = window.innerHeight * 0.6;
+    const maxW = window.innerWidth - 20, maxH = window.innerHeight * 0.65;
     const w = Math.min(maxW, maxH * proporcion), h = w / proporcion;
     lienzo.style.width = w + 'px';
     lienzo.style.height = h + 'px';
@@ -564,10 +622,6 @@ function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false) {
     document.getElementById('edTodo').onclick = () => { pts = esquinasCompletas(base); dibujar(); };
     document.getElementById('edCancelar').onclick = () => cerrar(null);
     document.getElementById('edListo').onclick = () => cerrar(ordenarEsquinas(pts));
-    document.getElementById('edOtra').onclick = () => {
-      camara.click(); // abre la galería/cámara de una vez para la siguiente página
-      cerrar(ordenarEsquinas(pts));
-    };
 
     function cerrar(resultado) {
       editor.classList.remove('visible');
@@ -765,6 +819,7 @@ function moverPagina(i, direccion) {
 
 async function editarPagina(i) {
   if (!opencvListo) return;
+  ocultarSiguiente();
   const pag = paginas[i];
   await mostrarCargando(true);
   const base = await aCanvas(pag.baseBlob);
@@ -793,6 +848,7 @@ function borrarPagina(i) {
 function empezarDeNuevo() {
   paginas.forEach(p => URL.revokeObjectURL(p.finalURL));
   paginas.length = 0;
+  ocultarSiguiente();
   mostrarPaginas();
   estado.textContent = '✅ Listo para escanear';
 }
@@ -967,6 +1023,7 @@ function puedeCompartir() {
 }
 
 document.getElementById('pdf').addEventListener('click', async () => {
+  ocultarSiguiente();
   const esPaciente = tipoDoc === 'paciente';
   document.getElementById('camposNormal').style.display = esPaciente ? 'none' : 'block';
   document.getElementById('camposPaciente').style.display = esPaciente ? 'block' : 'none';

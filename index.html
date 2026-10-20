@@ -19,11 +19,14 @@
     <button class="tipo" data-tipo="paciente">🧪 Paciente (lee cédula)</button>
   </div>
 
-  <!-- Escanear: cámara en vivo (principal) o foto de la galería -->
-  <button class="boton" id="btnEscanear">📷 Escanear</button>
+  <!-- Escanear con la cámara del celular, o usar una foto de la galería -->
+  <label class="boton" id="btnEscanear">
+    📷 Escanear
+    <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
+  </label>
   <label class="botonSec">
     🖼️ Usar foto de la galería
-    <input type="file" accept="image/*" id="camara" hidden>
+    <input type="file" accept="image/*" class="entradaFoto" hidden>
   </label>
 
   <div class="modos">
@@ -39,20 +42,20 @@
 
   <p id="version"></p>
 
-  <!-- Cámara en vivo -->
-  <div id="camaraVivo">
-    <p id="vivoMensaje">Apunta a la hoja</p>
-    <div id="vivoMarco">
-      <video id="video" playsinline muted autoplay></video>
-      <canvas id="capa"></canvas>
-      <div id="destello"></div>
+  <!-- Panel después de cada foto: otra página, repetir o listo -->
+  <div id="siguiente">
+    <p id="sigMensaje"></p>
+    <div class="filaSig">
+      <label class="sigBoton" id="sigRepetir">
+        🔄 Repetir
+        <input type="file" accept="image/*" capture="environment" class="entradaFoto" data-accion="repetir" hidden>
+      </label>
+      <label class="sigBoton sigPrincipal">
+        📷 Otra página
+        <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
+      </label>
+      <button class="sigBoton" id="sigListo">✓ Listo</button>
     </div>
-    <div class="filaVivo">
-      <button id="vivoAuto">🤖 Auto</button>
-      <button id="vivoDisparar" aria-label="Tomar foto"></button>
-      <button id="vivoLinterna">🔦</button>
-    </div>
-    <button id="vivoTerminar">✓ Terminar (<span id="vivoContador">0</span>)</button>
   </div>
 
   <!-- Editor de esquinas y lados -->
@@ -63,10 +66,7 @@
     <div class="filaEd">
       <button id="edCancelar">✕ Cancelar</button>
       <button id="edTodo">⬜ Toda la foto</button>
-    </div>
-    <div class="filaEd">
       <button id="edListo">✓ Listo</button>
-      <button id="edOtra">📷 Listo y otra</button>
     </div>
   </div>
 
@@ -101,6 +101,5 @@
   <div id="cargando"><div>⏳ Procesando...</div></div>
 
   <script src="app.js"></script>
-  <script src="camara.js"></script>
 </body>
 </html>
