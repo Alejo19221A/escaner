@@ -1,8 +1,9 @@
-const VERSION = '1.3';
-const DPI = 200;            // calidad de cada hoja en el PDF (como un escáner de oficina)
-const UMBRAL_NITIDEZ = 40;  // menor = acepta fotos más borrosas (se puede ajustar)
+const VERSION = '1.4';
+const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
+const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
+const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
 
-// Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura }
+// Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura, datosDlg }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
 const paginas = [];
 let modo = 'color';
@@ -139,7 +140,7 @@ async function agregarPagina(base, esquinas) {
     ? `✅ Página ${paginas.length} lista (${pagina.formato})`
     : `📄 Página ${paginas.length} lista (sin recorte)`;
   mostrarPaginas();
-  if (tipoDoc === 'paciente' && paginas.length === 1) leerPagina(pagina); // lee la cédula en segundo plano
+  if (tipoDoc === 'paciente') leerPagina(pagina); // lee la cédula en segundo plano
   return pagina;
 }
 
@@ -927,12 +928,12 @@ async function mostrarCargando(visible) {
   if (visible) await new Promise(r => setTimeout(r, 50)); // deja que se vea el aviso
 }
 
-// ---------- 10. Crear el PDF con el tamaño de cada hoja ----------
-async function crearPDF() {
+// ---------- 10. Crear un PDF con las páginas indicadas ----------
+async function crearPDF(lista = paginas) {
   const { jsPDF } = window.jspdf;
   let doc;
-  for (let i = 0; i < paginas.length; i++) {
-    const pag = paginas[i];
+  for (let i = 0; i < lista.length; i++) {
+    const pag = lista[i];
     const f = formatoDePagina(pag.ancho, pag.alto);
     const orientacion = f.w > f.h ? 'l' : 'p';
     if (i === 0) doc = new jsPDF({ unit: 'mm', format: [f.w, f.h], orientation: orientacion });
@@ -1025,16 +1026,17 @@ function extraerDatos(texto) {
   return { cedula, nombre };
 }
 
-// ---------- 12. Ventana de guardar ----------
+// ---------- 12. Ventana de guardar: todo en un PDF o un PDF por foto ----------
 const dlg = document.getElementById('dialogo');
-const dlgTitulo = document.getElementById('dlgTitulo');
-const dlgCedula = document.getElementById('dlgCedula');
-const dlgNombre = document.getElementById('dlgNombre');
+const dlgCampos = document.getElementById('dlgCampos');
 const dlgLectura = document.getElementById('dlgLectura');
 const dlgArchivo = document.getElementById('dlgArchivo');
 const dlgGuardar = document.getElementById('dlgGuardar');
 const dlgCompartir = document.getElementById('dlgCompartir');
-let pdfPreparado = null; // el PDF se arma mientras revisan los datos
+let forma = localStorage.getItem('formaPDF') || 'uno'; // 'uno' o 'varios' (recuerda la última)
+let datosUno = { titulo: '', cedula: '', nombre: '' };   // datos cuando es "Todo en un PDF"
+let pdfsListos = {};    // PDF ya armados, para guardar o compartir rápido
+let turnoLectura = 0;   // evita mezclar lecturas si cambian de opción
 
 // Quita los caracteres que Windows no permite en nombres de archivo
 function limpiarTitulo(texto) {
@@ -1046,27 +1048,175 @@ function fechaHora() {
   return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())} ${dos(d.getHours())}.${dos(d.getMinutes())}`;
 }
 
-function nombreArchivo() {
-  if (tipoDoc === 'normal') return `${limpiarTitulo(dlgTitulo.value)}.pdf`;
-  const cedula = dlgCedula.value.replace(/\D/g, '');
-  const nombre = limpiarNombre(dlgNombre.value);
-  return `${nombre} - CC ${cedula}.pdf`;
+// 1023456789 → 1.023.456.789
+const formatoCedula = d => d.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+// Si hay una sola foto, siempre es "Todo en un PDF"
+const formaEfectiva = () => (paginas.length > 1 ? forma : 'uno');
+
+// Lista de archivos que se van a crear: [{ paginas, datos }]
+function archivos() {
+  if (formaEfectiva() === 'uno') return [{ paginas: [...paginas], datos: datosUno }];
+  return paginas.map(p => ({ paginas: [p], datos: p.datosDlg }));
 }
 
-function datosCompletos() {
-  if (tipoDoc === 'normal') return limpiarTitulo(dlgTitulo.value).length > 0;
-  return dlgCedula.value.replace(/\D/g, '').length >= 5 &&
-         limpiarNombre(dlgNombre.value).length >= 3;
+function nombreDe(datos) {
+  if (tipoDoc === 'normal') return limpiarTitulo(datos.titulo);
+  return `${limpiarNombre(datos.nombre)} - CC ${datos.cedula.replace(/\D/g, '')}`;
+}
+
+function completo(datos) {
+  if (tipoDoc === 'normal') return limpiarTitulo(datos.titulo).length > 0;
+  return datos.cedula.replace(/\D/g, '').length >= 5 && limpiarNombre(datos.nombre).length >= 3;
+}
+
+// Nombres finales, sin repetidos: si dos se llaman igual, al segundo se le pone (2)
+function nombresFinales() {
+  const usados = {};
+  return archivos().map(a => {
+    let n = nombreDe(a.datos);
+    usados[n] = (usados[n] || 0) + 1;
+    if (usados[n] > 1) n += ` (${usados[n]})`;
+    return `${n}.pdf`;
+  });
+}
+
+// Crea una casilla (con su etiqueta) conectada a los datos
+function crearCampo(etiqueta, datos, clave, atributos = {}) {
+  const label = document.createElement('label');
+  label.textContent = etiqueta;
+  const input = document.createElement('input');
+  input.autocomplete = 'off';
+  for (const [k, v] of Object.entries(atributos)) input.setAttribute(k, v);
+  input.value = datos[clave] || '';
+  label.appendChild(input);
+
+  // Cédula en grande, con puntos, para revisarla de un vistazo
+  let grande = null;
+  if (clave === 'cedula') {
+    grande = document.createElement('div');
+    grande.className = 'cedulaGrande';
+    label.appendChild(grande);
+  }
+  const refrescar = () => {
+    if (!grande) return;
+    const d = input.value.replace(/\D/g, '');
+    grande.textContent = d ? formatoCedula(d) : '';
+  };
+
+  input.addEventListener('input', () => {
+    datos[clave] = input.value;
+    refrescar();
+    actualizarDialogo();
+  });
+
+  // Para que el OCR pueda llenar la casilla (solo si está vacía)
+  datos._poner = datos._poner || {};
+  datos._poner[clave] = valor => {
+    if (input.value) return;
+    input.value = valor;
+    datos[clave] = valor;
+    refrescar();
+    actualizarDialogo();
+  };
+
+  refrescar();
+  return label;
+}
+
+function dibujarCampos() {
+  const lista = archivos();
+  const varios = lista.length > 1;
+  document.getElementById('formas').style.display = paginas.length > 1 ? 'flex' : 'none';
+  document.querySelectorAll('.forma').forEach(b =>
+    b.classList.toggle('activo', b.dataset.forma === formaEfectiva()));
+  document.getElementById('dlgAviso').style.display = tipoDoc === 'paciente' ? '' : 'none';
+  dlgLectura.style.display = tipoDoc === 'paciente' ? '' : 'none';
+
+  dlgCampos.innerHTML = '';
+  lista.forEach((a, i) => {
+    const fila = document.createElement('div');
+    if (varios) {
+      fila.className = 'filaArchivo';
+      const img = document.createElement('img');
+      img.src = a.paginas[0].finalURL;
+      fila.appendChild(img);
+    }
+    const campos = document.createElement('div');
+    campos.className = 'camposArchivo';
+    if (tipoDoc === 'normal') {
+      campos.appendChild(crearCampo(varios ? `Foto ${i + 1}` : 'Nombre del archivo', a.datos, 'titulo'));
+    } else {
+      campos.appendChild(crearCampo(varios ? `Foto ${i + 1} · Cédula` : 'Cédula del paciente',
+        a.datos, 'cedula', { inputmode: 'numeric' }));
+      campos.appendChild(crearCampo('Nombre del paciente', a.datos, 'nombre', { autocapitalize: 'characters' }));
+    }
+    fila.appendChild(campos);
+    dlgCampos.appendChild(fila);
+  });
+  actualizarDialogo();
 }
 
 function actualizarDialogo() {
-  const listo = datosCompletos();
+  const lista = archivos();
+  const n = lista.length;
+  const listo = lista.every(a => completo(a.datos));
   dlgGuardar.disabled = !listo;
   dlgCompartir.disabled = !listo;
-  dlgArchivo.textContent = listo ? `📄 ${nombreArchivo()}`
-    : (tipoDoc === 'normal' ? 'Escribe un nombre para el archivo' : 'Completa la cédula y el nombre');
+  dlgGuardar.textContent = n > 1 ? `💾 Guardar los ${n}` : '💾 Guardar';
+  dlgCompartir.textContent = n > 1 ? `📤 Compartir los ${n}` : '📤 Compartir';
+  if (!listo) {
+    dlgArchivo.textContent = tipoDoc === 'normal'
+      ? 'Escribe un nombre para cada archivo'
+      : 'Completa la cédula y el nombre';
+  } else {
+    dlgArchivo.textContent = n > 1 ? `📑 Se crearán ${n} PDF separados` : `📄 ${nombresFinales()[0]}`;
+  }
 }
-[dlgTitulo, dlgCedula, dlgNombre].forEach(c => c.addEventListener('input', actualizarDialogo));
+
+// Arma los PDF de la opción elegida (una sola vez)
+function prepararPDFs() {
+  const clave = formaEfectiva();
+  if (!pdfsListos[clave]) {
+    const grupos = archivos().map(a => a.paginas);
+    pdfsListos[clave] = (async () => {
+      const blobs = [];
+      for (const g of grupos) blobs.push(await crearPDF(g));
+      return blobs;
+    })().catch(err => {
+      console.error(err);
+      delete pdfsListos[clave];
+      return null;
+    });
+  }
+  return pdfsListos[clave];
+}
+
+// Modo Paciente: lee la cédula de cada archivo
+async function leerCedulas() {
+  const turno = ++turnoLectura;
+  const lista = archivos();
+  for (let i = 0; i < lista.length; i++) {
+    const a = lista[i];
+    dlgLectura.textContent = lista.length > 1
+      ? `🔍 Leyendo cédulas... (${i + 1} de ${lista.length})`
+      : '🔍 Leyendo la cédula del documento...';
+    const datos = { cedula: '', nombre: '' };
+    for (const pag of a.paginas.slice(0, 2)) { // en cada archivo, busca en sus 2 primeras páginas
+      const d = await leerPagina(pag);
+      if (!datos.cedula) datos.cedula = d.cedula;
+      if (!datos.nombre) datos.nombre = d.nombre;
+      if (datos.cedula) break;
+    }
+    if (turno !== turnoLectura || !dlg.classList.contains('visible')) return;
+    if (datos.cedula && a.datos._poner) a.datos._poner.cedula(datos.cedula);
+    if (datos.nombre && a.datos._poner) a.datos._poner.nombre(datos.nombre);
+  }
+  const faltan = lista.filter(a => a.datos.cedula.replace(/\D/g, '').length < 5).length;
+  dlgLectura.textContent = faltan === 0
+    ? '✅ Revisa las cédulas y escribe los nombres'
+    : `✋ No pude leer ${faltan === 1 ? '1 cédula' : faltan + ' cédulas'}: escríbelas por favor`;
+}
 
 function puedeCompartir() {
   try {
@@ -1075,49 +1225,40 @@ function puedeCompartir() {
   } catch { return false; }
 }
 
-document.getElementById('pdf').addEventListener('click', async () => {
-  const esPaciente = tipoDoc === 'paciente';
-  document.getElementById('camposNormal').style.display = esPaciente ? 'none' : 'block';
-  document.getElementById('camposPaciente').style.display = esPaciente ? 'block' : 'none';
+// Abrir la ventana de guardar
+document.getElementById('pdf').addEventListener('click', () => {
+  pdfsListos = {};
+  const hora = fechaHora();
+  datosUno = { titulo: `Documento ${hora}`, cedula: '', nombre: '' };
+  paginas.forEach((p, i) => { p.datosDlg = { titulo: `Documento ${hora} (${i + 1})`, cedula: '', nombre: '' }; });
+  dlgLectura.textContent = '';
   dlgCompartir.style.display = puedeCompartir() ? 'block' : 'none';
   dlg.classList.add('visible');
-
-  pdfPreparado = crearPDF().catch(err => { console.error(err); return null; });
-
-  // Documento normal: solo el nombre del archivo
-  if (!esPaciente) {
-    dlgTitulo.value = `Documento ${fechaHora()}`;
-    actualizarDialogo();
-    dlgTitulo.focus();
-    dlgTitulo.select();
-    return;
+  dibujarCampos();
+  prepararPDFs();
+  if (tipoDoc === 'paciente') {
+    leerCedulas();
+  } else if (archivos().length === 1) {
+    const primero = dlgCampos.querySelector('input');
+    if (primero) { primero.focus(); primero.select(); }
   }
+});
 
-  // Paciente: leer la cédula con OCR
-  dlgCedula.value = '';
-  dlgNombre.value = '';
-  actualizarDialogo();
-  dlgLectura.textContent = '🔍 Leyendo la cédula del documento...';
-  let datos = { cedula: '', nombre: '' };
-  for (const pag of paginas.slice(0, 2)) { // busca en las 2 primeras páginas
-    const d = await leerPagina(pag);
-    if (!datos.cedula) datos.cedula = d.cedula;
-    if (!datos.nombre) datos.nombre = d.nombre;
-    if (datos.cedula) break;
-  }
-  if (!dlg.classList.contains('visible')) return;
-  if (!dlgCedula.value && datos.cedula) dlgCedula.value = datos.cedula;
-  if (!dlgNombre.value && datos.nombre) dlgNombre.value = datos.nombre;
-  dlgLectura.textContent = datos.cedula
-    ? '✅ Cédula encontrada: revísala y escribe el nombre'
-    : '✋ No pude leer la cédula: escríbela por favor';
-  actualizarDialogo();
-  if (!dlgNombre.value) dlgNombre.focus();
+// Cambiar entre "Todo en un PDF" y "Un PDF por foto"
+document.querySelectorAll('.forma').forEach(boton => {
+  boton.addEventListener('click', () => {
+    forma = boton.dataset.forma;
+    localStorage.setItem('formaPDF', forma);
+    dibujarCampos();
+    prepararPDFs();
+    if (tipoDoc === 'paciente') leerCedulas();
+  });
 });
 
 function cerrarDialogo() {
   dlg.classList.remove('visible');
-  pdfPreparado = null;
+  turnoLectura++;
+  pdfsListos = {};
 }
 document.getElementById('dlgCancelar').addEventListener('click', cerrarDialogo);
 
@@ -1140,35 +1281,61 @@ function terminar(mensaje) {
 }
 
 dlgGuardar.addEventListener('click', async () => {
-  const nombre = nombreArchivo();
+  const nombres = nombresFinales();
   await mostrarCargando(true);
   try {
-    const blob = (await pdfPreparado) || (await crearPDF());
-    descargar(blob, nombre);
+    const blobs = await prepararPDFs();
+    if (!blobs) throw new Error('No se pudieron crear los PDF');
+    for (let i = 0; i < blobs.length; i++) {
+      descargar(blobs[i], nombres[i]);
+      if (blobs.length > 1) await new Promise(r => setTimeout(r, 400)); // pausa entre descargas
+    }
     mostrarCargando(false);
-    terminar(`✅ Guardado: ${nombre}`);
+    terminar(nombres.length > 1 ? `✅ Se guardaron ${nombres.length} PDF` : `✅ Guardado: ${nombres[0]}`);
   } catch (err) {
     console.error(err);
-    estado.textContent = '❌ Hubo un error creando el PDF.';
+    dlgArchivo.textContent = '❌ Hubo un error creando el PDF.';
   } finally {
     mostrarCargando(false);
   }
 });
 
 dlgCompartir.addEventListener('click', async () => {
-  const nombre = nombreArchivo();
+  const nombres = nombresFinales();
   try {
-    const blob = (await pdfPreparado) || (await crearPDF());
-    const archivo = new File([blob], nombre, { type: 'application/pdf' });
-    await navigator.share({ files: [archivo], title: nombre });
-    terminar(`📤 Compartido: ${nombre}`);
+    const blobs = await prepararPDFs();
+    if (!blobs) throw new Error('No se pudieron crear los PDF');
+    const pdfs = blobs.map((b, i) => new File([b], nombres[i], { type: 'application/pdf' }));
+    if (navigator.canShare && !navigator.canShare({ files: pdfs })) {
+      dlgArchivo.textContent = '❌ Este celular no deja compartir varios a la vez. Usa "Guardar".';
+      return;
+    }
+    await navigator.share({
+      files: pdfs,
+      title: pdfs.length > 1 ? `${pdfs.length} documentos` : nombres[0]
+    });
+    terminar(nombres.length > 1 ? `📤 Se compartieron ${nombres.length} PDF` : `📤 Compartido: ${nombres[0]}`);
   } catch (err) {
     if (err.name === 'AbortError') return; // cerró el menú de compartir
     console.error(err);
-    const aviso = err.name === 'NotAllowedError'
+    dlgArchivo.textContent = err.name === 'NotAllowedError'
       ? '👆 Toca "Compartir" otra vez, por favor'
       : '❌ No se pudo compartir. Usa "Guardar".';
-    if (tipoDoc === 'paciente') dlgLectura.textContent = aviso;
-    else dlgArchivo.textContent = aviso;
   }
 });
+
+// ---------- 13. Borrado automático por inactividad (protege los datos) ----------
+let ultimaActividad = Date.now();
+['pointerdown', 'keydown', 'change'].forEach(evento =>
+  document.addEventListener(evento, () => { ultimaActividad = Date.now(); }, true));
+
+function revisarInactividad() {
+  if (!paginas.length) return;
+  if (Date.now() - ultimaActividad < MINUTOS_INACTIVIDAD * 60000) return;
+  if (document.getElementById('editor').classList.contains('visible')) return;
+  cerrarDialogo();
+  empezarDeNuevo();
+  estado.textContent = '🔒 Las páginas se borraron por inactividad (protección de datos)';
+}
+setInterval(revisarInactividad, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarInactividad(); });

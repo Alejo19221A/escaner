@@ -63,17 +63,33 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 
 /* Ventana de guardar */
 #dialogo { display: none; position: fixed; inset: 0; background: #0009; z-index: 26;
-           align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+           align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
 #dialogo.visible { display: flex; }
-#dialogo .caja { background: white; border-radius: 16px; padding: 20px; width: 100%;
-                 max-width: 420px; text-align: left; }
-#dialogo h2 { margin: 0 0 6px; color: #1a3d6d; font-size: 20px; }
-#dialogo label { display: block; margin: 14px 0 4px; font-weight: bold; color: #333; }
-#dialogo input { width: 100%; box-sizing: border-box; padding: 12px; font-size: 18px;
-                 border: 2px solid #ccc; border-radius: 10px; }
-#dialogo input:focus { border-color: #1a73e8; outline: none; }
-#camposNormal, #camposPaciente { display: none; }
-#dlgLectura { color: #555; margin: 0; }
+#dialogo .caja { background: white; border-radius: 16px; padding: 18px; width: 100%;
+                 max-width: 460px; max-height: 92vh; overflow-y: auto; text-align: left;
+                 box-sizing: border-box; }
+#dialogo h2 { margin: 0 0 10px; color: #1a3d6d; font-size: 20px; }
+
+.formas { display: flex; gap: 8px; margin-bottom: 12px; }
+.forma { flex: 1; padding: 12px 4px; font-size: 14px; border: 2px solid #188038;
+         background: white; color: #188038; border-radius: 10px; }
+.forma.activo { background: #188038; color: white; }
+
+#dlgLectura { color: #555; margin: 0 0 6px; }
+#dlgCampos label { display: block; margin: 10px 0 2px; font-weight: bold; color: #333; font-size: 14px; }
+#dlgCampos input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 11px;
+                   font-size: 17px; font-weight: normal; border: 2px solid #ccc; border-radius: 10px; }
+#dlgCampos input:focus { border-color: #1a73e8; outline: none; }
+.cedulaGrande { font-size: 24px; font-weight: bold; color: #1a3d6d; letter-spacing: 1px;
+                margin-top: 4px; min-height: 0; }
+
+/* Un PDF por foto: una fila por cada foto */
+.filaArchivo { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0;
+               border-bottom: 1px solid #eee; }
+.filaArchivo img { width: 60px; border-radius: 6px; box-shadow: 0 1px 4px #0003; flex-shrink: 0; }
+.camposArchivo { flex: 1; min-width: 0; }
+.filaArchivo label:first-child { margin-top: 0 !important; }
+
 .aviso { color: #b06000; font-size: 14px; margin: 12px 0 4px; }
 #dlgArchivo { font-size: 13px; color: #555; word-break: break-all; margin: 12px 0; }
 .filaDlg { display: flex; gap: 8px; }
@@ -82,4 +98,4 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #dlgCancelar { background: #777; }
 #dlgGuardar { background: #188038; }
 #dlgCompartir { display: block; width: 100%; margin-top: 8px; background: #1a73e8; }
-#dialogo button:disabled { background: #bbb; }
+#dialogo button:disabled { background: #bbb; color: white; }

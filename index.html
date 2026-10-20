@@ -65,21 +65,17 @@
     <div class="caja">
       <h2>💾 Guardar documento</h2>
 
-      <div id="camposNormal">
-        <label for="dlgTitulo">Nombre del archivo</label>
-        <input id="dlgTitulo" autocomplete="off">
+      <!-- Todo en un PDF o un PDF por foto (solo si hay varias fotos) -->
+      <div class="formas" id="formas">
+        <button class="forma" data-forma="uno">📄 Todo en un PDF</button>
+        <button class="forma" data-forma="varios">📑 Un PDF por foto</button>
       </div>
 
-      <div id="camposPaciente">
-        <p id="dlgLectura"></p>
-        <label for="dlgCedula">Cédula del paciente</label>
-        <input id="dlgCedula" inputmode="numeric" autocomplete="off">
-        <label for="dlgNombre">Nombre del paciente</label>
-        <input id="dlgNombre" autocomplete="off" autocapitalize="characters">
-        <p class="aviso">⚠️ Revisa que la cédula coincida con el documento</p>
-      </div>
-
+      <p id="dlgLectura"></p>
+      <div id="dlgCampos"></div>
+      <p class="aviso" id="dlgAviso">⚠️ Revisa que cada cédula coincida con su documento</p>
       <p id="dlgArchivo"></p>
+
       <div class="filaDlg">
         <button id="dlgCancelar">Cancelar</button>
         <button id="dlgGuardar">💾 Guardar</button>
