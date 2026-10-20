@@ -1,4 +1,4 @@
-const VERSION = '1.4';
+const VERSION = '1.5';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -49,6 +49,7 @@ async function aCanvas(blob) {
   return c;
 }
 function liberar(c) { if (c) { c.width = 0; c.height = 0; } }
+const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // Copia reducida de una imagen (rápido, lo hace el navegador)
 function copiaReducida(origen, maxLado) {
@@ -108,17 +109,24 @@ async function manejarFoto(archivo) {
       return;
     }
 
-    // Propuesta automática, afinada en los bordes
-    let detectadas = detectarEsquinas(base);
-    if (detectadas) detectadas = refinarEsquinas(base, detectadas);
-    const borrosa = detectadas && medirNitidez(base, detectadas) < UMBRAL_NITIDEZ;
+    // Hasta 3 propuestas automáticas, afinadas en los bordes
+    let opciones = detectarCandidatos(base);
+    if (opciones.length) opciones = refinarVarias(base, opciones);
+    const detectada = opciones.length > 0;
+    const borrosa = detectada && medirNitidez(base, opciones[0]) < UMBRAL_NITIDEZ;
 
-    let mensaje = detectadas ? '✅ Revisa el recorte y toca Listo' : '✋ No encontré la hoja: ajusta el recuadro';
+    let mensaje = '✋ No encontré la hoja: ajusta el recuadro';
+    if (detectada) {
+      mensaje = opciones.length > 1
+        ? '✅ Revisa el recorte. ¿No es la hoja? Toca 🔄 Otra opción'
+        : '✅ Revisa el recorte y toca Listo';
+    }
     if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
 
     // Siempre se muestra el editor para confirmar
     mostrarCargando(false);
-    const esquinas = await abrirEditor(base, detectadas || esquinasPorDefecto(base), mensaje, true, borrosa);
+    const esquinas = await abrirEditor(base, detectada ? opciones : [esquinasPorDefecto(base)],
+      mensaje, true, borrosa);
     if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
 
     await mostrarCargando(true);
@@ -186,12 +194,13 @@ function medirNitidez(base, esquinas) {
   return valor;
 }
 
-// ---------- 4. Detectar la hoja automáticamente ----------
-function detectarEsquinas(base, tamano = 800) {
+// ---------- 4. Detectar la hoja: hasta 3 propuestas, de la mejor a la peor ----------
+function detectarCandidatos(base, tamano = 800) {
   // Primero se achica la foto (rápido) y solo esa copia pequeña pasa a OpenCV
   const { canvas: chico, escala } = copiaReducida(base, tamano);
   const peque = cv.imread(chico);
   liberar(chico);
+  const diagonal = Math.hypot(peque.cols, peque.rows);
 
   const rgb = new cv.Mat(), gris = new cv.Mat(), hsv = new cv.Mat();
   cv.cvtColor(peque, rgb, cv.COLOR_RGBA2RGB);
@@ -241,24 +250,32 @@ function detectarEsquinas(base, tamano = 800) {
     bordes.delete();
   }
 
-  // Vuelta rápida a todos; el cálculo pesado (contraste) solo a los 3 mejores
-  const mejores = candidatos
+  // Vuelta rápida a todos; el cálculo pesado (contraste) solo a los 6 mejores
+  const finales = candidatos
     .map(q => ({ q, p: puntaje(q, gris, mapaBordes, areaTotal, false) }))
     .filter(c => c.p > 0)
     .sort((a, b) => b.p - a.p)
-    .slice(0, 3);
-  let mejor = null, mejorPuntaje = 0;
-  for (const c of mejores) {
-    const p = puntaje(c.q, gris, mapaBordes, areaTotal, true);
-    if (p > mejorPuntaje) { mejorPuntaje = p; mejor = c.q; }
-  }
+    .slice(0, 6)
+    .map(c => ({ q: c.q, p: puntaje(c.q, gris, mapaBordes, areaTotal, true) }))
+    .filter(c => c.p > 0)
+    .sort((a, b) => b.p - a.p);
 
   [peque, rgb, gris, hsv, realzado, mapaBordes, k5, claro, blanco, bajo, alto, kCierre, k3]
     .forEach(m => m.delete());
-  if (!mejor) return null;
+
+  // Quedarse con hasta 3 propuestas que sean distintas entre sí
+  const elegidas = [];
+  for (const c of finales) {
+    const o = ordenarEsquinas(c.q);
+    const repetida = elegidas.some(e =>
+      Math.max(...e.map((p, i) => distancia(p, o[i]))) < diagonal * 0.04);
+    if (repetida) continue;
+    elegidas.push(o);
+    if (elegidas.length === 3) break;
+  }
 
   const lim = (v, max) => Math.min(max, Math.max(0, v));
-  return ordenarEsquinas(mejor.map(p => ({
+  return elegidas.map(o => o.map(p => ({
     x: lim(p.x / escala, base.width),
     y: lim(p.y / escala, base.height)
   })));
@@ -334,26 +351,39 @@ function puntaje(q, gris, mapaBordes, areaTotal, conContraste) {
   const fraccion = Math.abs(area) / 2 / areaTotal;
   if (fraccion < 0.15 || fraccion > 0.99) return 0;
 
-  // 3. ¿Los 4 lados caen sobre líneas reales de la foto?
+  // 3. ¿Los 4 lados caen sobre líneas reales de la foto? (y cuántos van por el borde de la foto)
   const W = mapaBordes.cols, H = mapaBordes.rows;
-  let total = 0, aciertos = 0;
+  let total = 0, aciertos = 0, ladosEnBorde = 0;
   for (let i = 0; i < 4; i++) {
     const a = o[i], b = o[(i + 1) % 4];
+    let muestras = 0, enBorde = 0;
     for (let t = 0; t <= 1; t += 0.02) {
       const x = Math.round(a.x + (b.x - a.x) * t);
       const y = Math.round(a.y + (b.y - a.y) * t);
       total++;
-      if (x <= 3 || y <= 3 || x >= W - 4 || y >= H - 4) aciertos += 0.6; // hoja cortada por la foto
+      muestras++;
+      if (x <= 3 || y <= 3 || x >= W - 4 || y >= H - 4) { aciertos += 0.15; enBorde++; }
       else if (mapaBordes.data[y * W + x] > 0) aciertos++;
     }
+    if (enBorde > muestras * 0.5) ladosEnBorde++;
   }
   const soporte = aciertos / total;
-  if (soporte < 0.45) return 0;
+  if (soporte < 0.4) return 0;
 
-  const base = soporte * soporte * Math.sqrt(fraccion) * factorAngulos;
+  // 4. Castigos y premios
+  let ajuste = 1;
+  if (ladosEnBorde >= 2) ajuste *= 0.4;       // casi seguro es la mesa, no la hoja
+  else if (ladosEnBorde === 1) ajuste *= 0.75;
+  if (fraccion > 0.85) ajuste *= 0.5;         // demasiado grande para ser solo la hoja
+  const anchoAprox = (distancia(o[0], o[1]) + distancia(o[3], o[2])) / 2;
+  const altoAprox = (distancia(o[0], o[3]) + distancia(o[1], o[2])) / 2;
+  const prop = Math.max(anchoAprox, altoAprox) / Math.min(anchoAprox, altoAprox);
+  if (FORMATOS.some(f => Math.abs(prop - f.h / f.w) / (f.h / f.w) < 0.06)) ajuste *= 1.3; // forma de hoja real
+
+  const base = soporte * soporte * Math.sqrt(fraccion) * factorAngulos * ajuste;
   if (!conContraste) return base;
 
-  // 4. Contraste: lo de adentro (papel) suele ser más claro que lo de afuera
+  // 5. Contraste: lo de adentro (papel) suele ser más claro que lo de afuera
   const mascara = cv.Mat.zeros(gris.rows, gris.cols, cv.CV_8U);
   const poli = cv.matFromArray(4, 1, cv.CV_32SC2,
     o.flatMap(p => [Math.round(p.x), Math.round(p.y)]));
@@ -375,8 +405,9 @@ function puntaje(q, gris, mapaBordes, areaTotal, conContraste) {
   return base * (1 + Math.max(0, contraste) / 40);
 }
 
-// Afina las esquinas: busca la orilla real de cada lado y traza una línea recta exacta
-function refinarEsquinas(base, esquinas) {
+// Afina las esquinas de varias propuestas a la vez: busca la orilla real de cada lado
+// y traza una línea recta exacta
+function refinarVarias(base, lista) {
   try {
     const { canvas: c, escala: esc } = copiaReducida(base, 1600);
     const src = cv.imread(c), gris = new cv.Mat(), bordes = new cv.Mat();
@@ -384,50 +415,54 @@ function refinarEsquinas(base, esquinas) {
     cv.cvtColor(src, gris, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gris, gris, new cv.Size(3, 3), 0);
     cv.Canny(gris, bordes, 30, 90);
-    const W = bordes.cols, H = bordes.rows, datos = bordes.data;
-
-    const p = esquinas.map(q => ({ x: q.x * esc, y: q.y * esc }));
-    const banda = Math.max(6, Math.round(Math.max(W, H) * 0.015)); // cuánto puede corregir
-    const muestras = 60;
-    const lineas = [];
-
-    for (let i = 0; i < 4; i++) {
-      const a = p[i], b = p[(i + 1) % 4];
-      const largo = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      const nx = -(b.y - a.y) / largo, ny = (b.x - a.x) / largo;
-      const puntos = [];
-      for (let k = 4; k < muestras - 4; k++) { // sin las puntas, que suelen estar dobladas
-        const t = k / muestras;
-        const cx = a.x + (b.x - a.x) * t, cy = a.y + (b.y - a.y) * t;
-        let encontrado = null;
-        for (let d = 0; d <= banda && encontrado === null; d++) {
-          for (const s of (d === 0 ? [0] : [d, -d])) {
-            const x = Math.round(cx + nx * s), y = Math.round(cy + ny * s);
-            if (x >= 0 && y >= 0 && x < W && y < H && datos[y * W + x]) { encontrado = s; break; }
-          }
-        }
-        if (encontrado !== null) puntos.push({ x: cx + nx * encontrado, y: cy + ny * encontrado });
-      }
-      lineas.push(puntos.length >= (muestras - 8) * 0.4 ? ajustarLinea(puntos) : null);
-    }
+    const W = bordes.cols, H = bordes.rows;
+    const datos = bordes.data.slice(); // copia para poder liberar la memoria de OpenCV
     [src, gris, bordes].forEach(m => m.delete());
-
-    // Cada esquina queda donde se cruzan sus dos lados
-    const nuevas = p.map((q, i) => {
-      const l1 = lineas[(i + 3) % 4], l2 = lineas[i];
-      if (!l1 || !l2) return q;
-      const cruce = interseccion(l1, l2);
-      if (!cruce || Math.hypot(cruce.x - q.x, cruce.y - q.y) > banda * 2) return q;
-      return {
-        x: Math.min(W, Math.max(0, cruce.x)),
-        y: Math.min(H, Math.max(0, cruce.y))
-      };
-    });
-    return nuevas.map(q => ({ x: q.x / esc, y: q.y / esc }));
+    return lista.map(esquinas => refinarUna(esquinas, esc, datos, W, H));
   } catch (err) {
     console.error(err);
-    return esquinas; // si algo falla, se queda la propuesta original
+    return lista; // si algo falla, se quedan las propuestas originales
   }
+}
+
+function refinarUna(esquinas, esc, datos, W, H) {
+  const p = esquinas.map(q => ({ x: q.x * esc, y: q.y * esc }));
+  const banda = Math.max(6, Math.round(Math.max(W, H) * 0.015)); // cuánto puede corregir
+  const muestras = 60;
+  const lineas = [];
+
+  for (let i = 0; i < 4; i++) {
+    const a = p[i], b = p[(i + 1) % 4];
+    const largo = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const nx = -(b.y - a.y) / largo, ny = (b.x - a.x) / largo;
+    const puntos = [];
+    for (let k = 4; k < muestras - 4; k++) { // sin las puntas, que suelen estar dobladas
+      const t = k / muestras;
+      const cx = a.x + (b.x - a.x) * t, cy = a.y + (b.y - a.y) * t;
+      let encontrado = null;
+      for (let d = 0; d <= banda && encontrado === null; d++) {
+        for (const s of (d === 0 ? [0] : [d, -d])) {
+          const x = Math.round(cx + nx * s), y = Math.round(cy + ny * s);
+          if (x >= 0 && y >= 0 && x < W && y < H && datos[y * W + x]) { encontrado = s; break; }
+        }
+      }
+      if (encontrado !== null) puntos.push({ x: cx + nx * encontrado, y: cy + ny * encontrado });
+    }
+    lineas.push(puntos.length >= (muestras - 8) * 0.4 ? ajustarLinea(puntos) : null);
+  }
+
+  // Cada esquina queda donde se cruzan sus dos lados
+  const nuevas = p.map((q, i) => {
+    const l1 = lineas[(i + 3) % 4], l2 = lineas[i];
+    if (!l1 || !l2) return q;
+    const cruce = interseccion(l1, l2);
+    if (!cruce || distancia(cruce, q) > banda * 2) return q;
+    return {
+      x: Math.min(W, Math.max(0, cruce.x)),
+      y: Math.min(H, Math.max(0, cruce.y))
+    };
+  });
+  return nuevas.map(q => ({ x: q.x / esc, y: q.y / esc }));
 }
 
 // Línea recta que mejor pasa por varios puntos
@@ -479,8 +514,8 @@ function esquinasCompletas(base) {
   ];
 }
 
-// ---------- 5. Editor: mover esquinas y lados (con lupa) ----------
-function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false, alerta = false) {
+// ---------- 5. Editor: mover esquinas y lados (con lupa) y cambiar de propuesta ----------
+function abrirEditor(base, opciones, mensaje, permitirOtra = false, alerta = false) {
   return new Promise(resolve => {
     const editor = document.getElementById('editor');
     const lienzo = document.getElementById('lienzo');
@@ -510,8 +545,20 @@ function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false, ale
     vctx.imageSmoothingQuality = 'high';
     vctx.drawImage(base, 0, 0, vista.width, vista.height);
 
-    let pts = esquinasIniciales.map(p => ({ ...p }));
+    let indice = 0;
+    let pts = opciones[0].map(p => ({ ...p }));
     let arrastre = null; // lo que se está arrastrando: una esquina o un lado
+
+    // Botón "Otra opción": muestra la siguiente propuesta automática
+    const btnOpcion = document.getElementById('edOpcion');
+    btnOpcion.style.display = opciones.length > 1 ? '' : 'none';
+    btnOpcion.onclick = () => {
+      indice = (indice + 1) % opciones.length;
+      pts = opciones[indice].map(p => ({ ...p }));
+      edMensaje.textContent = `🔄 Opción ${indice + 1} de ${opciones.length}: revisa el recorte`;
+      edMensaje.classList.remove('alerta');
+      dibujar();
+    };
 
     const lim = (v, max) => Math.min(max, Math.max(0, v));
     const medio = i => {
@@ -703,9 +750,8 @@ function abrirEditor(base, esquinasIniciales, mensaje, permitirOtra = false, ale
 // ---------- 6. Enderezar la hoja, directo al tamaño final (200 DPI) ----------
 function enderezar(base, esquinas) {
   const [ai, ad, bd, bi] = esquinas;
-  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  let ancho = Math.max(dist(ai, ad), dist(bi, bd));
-  let alto = Math.max(dist(ai, bi), dist(ad, bd));
+  let ancho = Math.max(distancia(ai, ad), distancia(bi, bd));
+  let alto = Math.max(distancia(ai, bi), distancia(ad, bd));
   if (ancho < 20 || alto < 20) return base;
 
   // Tamaño final según el formato de la hoja
@@ -892,7 +938,7 @@ async function editarPagina(i) {
   const base = await aCanvas(pag.baseBlob);
   mostrarCargando(false);
   try {
-    const esquinas = await abrirEditor(base, pag.esquinas || esquinasCompletas(base),
+    const esquinas = await abrirEditor(base, [pag.esquinas || esquinasCompletas(base)],
       '✏️ Ajusta el recuadro de la hoja');
     if (esquinas) {
       await mostrarCargando(true);

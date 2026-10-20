@@ -57,6 +57,7 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
                           padding: 14px 4px; font-size: 16px; border: none;
                           border-radius: 10px; color: white; cursor: pointer; }
 #edCancelar { background: #d93025; }
+#edOpcion { background: #7b1fa2; }
 #edTodo { background: #555; }
 #edListo { background: #188038; }
 #edOtra { background: #1a73e8; }
