@@ -184,8 +184,15 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #txWord { background: #1a5bbf; }
 #txOtras { grid-column: 1 / -1; background: #777; padding: 10px 4px; font-size: 14px; }
 
-/* En computador o con el celular acostado: foto y texto lado a lado */
-@media (orientation: landscape), (min-width: 800px) {
+/* Mientras se escribe (teclado abierto): más espacio para la foto y el texto */
+#textoDlg.escribiendo #txPestanas,
+#textoDlg.escribiendo .txLeyenda,
+#textoDlg.escribiendo .txPie { display: none !important; }
+#textoDlg.escribiendo #txRevisar { padding: 6px; }
+#textoDlg.escribiendo #txDivisor { flex-basis: 10px; }
+
+/* En computador o pantallas anchas: foto y texto lado a lado */
+@media (min-width: 700px) {
   #txPanel { flex-direction: row; }
   #txDivisor { cursor: col-resize; }
   #txDivisor::after { width: 5px; height: 50px; }

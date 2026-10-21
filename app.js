@@ -1,4 +1,4 @@
-const VERSION = '1.7.1';
+const VERSION = '1.7.2';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -1737,7 +1737,9 @@ let txPag = null;              // página que se ve ahora
 let txImagen = null;           // foto de esa página, en color
 let txPalabras = [];           // palabras con su recuadro en la foto
 let txSel = -1;                // palabra tocada
+let txSeguirPalabra = false;   // la foto sigue a la palabra tocada (aunque salga o se esconda el teclado)
 let txVista = { zoom: 1, ox: 0, oy: 0 };
+const esAndroid = /Android/i.test(navigator.userAgent);
 
 function mostrarPaso(paso) {
   ['Elegir', 'Leyendo', 'Revisar'].forEach(p => porId('tx' + p).classList.toggle('activo', p === paso));
@@ -1852,6 +1854,7 @@ async function mostrarPaginaTx(pag) {
   guardarEdicionTx();
   txPag = pag;
   txSel = -1;
+  txSeguirPalabra = false;
   [...porId('txPestanas').children].forEach((b, i) =>
     b.classList.toggle('activa', txListaRevision[i] === pag));
 
@@ -1900,11 +1903,22 @@ function vistaAjustada() {
   const s = escalaBase();
   txVista = { zoom: 1, ox: (txLienzo.width - txImagen.width * s) / 2, oy: (txLienzo.height - txImagen.height * s) / 2 };
 }
+
+// Que la foto no se pueda arrastrar fuera del recuadro
+function limitarVista() {
+  const s = escalaBase() * txVista.zoom;
+  const w = txImagen.width * s, h = txImagen.height * s;
+  const W = txLienzo.width, H = txLienzo.height;
+  txVista.ox = w <= W ? (W - w) / 2 : Math.min(0, Math.max(W - w, txVista.ox));
+  txVista.oy = h <= H ? (H - h) / 2 : Math.min(0, Math.max(H - h, txVista.oy));
+}
+
 function dibujarTx() {
   const ctx = txLienzo.getContext('2d');
   ctx.fillStyle = '#222';
   ctx.fillRect(0, 0, txLienzo.width, txLienzo.height);
   if (!txImagen) return;
+  limitarVista();
   const s = escalaBase() * txVista.zoom;
   const dpr = window.devicePixelRatio || 1;
   ctx.drawImage(txImagen, txVista.ox, txVista.oy, txImagen.width * s, txImagen.height * s);
@@ -1922,7 +1936,19 @@ function dibujarTx() {
     }
   });
 }
+
+// Pone una palabra en el centro de la foto, acercada
+function centrarEnPalabra(i) {
+  const w = txPalabras[i];
+  if (!w || !txImagen) return;
+  txVista.zoom = Math.max(txVista.zoom, 2.5);
+  const s = escalaBase() * txVista.zoom;
+  txVista.ox = txLienzo.width / 2 - ((w.x0 + w.x1) / 2) * s;
+  txVista.oy = txLienzo.height / 2 - ((w.y0 + w.y1) / 2) * s;
+}
+
 function zoomEn(factor, px, py) {
+  txSeguirPalabra = false;
   const nuevo = Math.min(8, Math.max(1, txVista.zoom * factor));
   const f = nuevo / txVista.zoom;
   txVista.ox = px - (px - txVista.ox) * f;
@@ -1931,9 +1957,51 @@ function zoomEn(factor, px, py) {
   if (nuevo === 1) vistaAjustada();
   dibujarTx();
 }
-porId('txMas').onclick = () => zoomEn(1.5, txLienzo.width / 2, txLienzo.height / 2);
-porId('txMenos').onclick = () => zoomEn(1 / 1.5, txLienzo.width / 2, txLienzo.height / 2);
-porId('txAjustar').onclick = () => { vistaAjustada(); dibujarTx(); };
+
+// Cuando cambia el tamaño (sale o se esconde el teclado, se mueve la barrita):
+// se conserva el acercamiento y el mismo punto de la foto en el centro
+function reacomodarTx() {
+  if (!txDlg.classList.contains('visible') || !txImagen) return;
+  const sAntes = escalaBase() * txVista.zoom;
+  const cx = (txLienzo.width / 2 - txVista.ox) / sAntes;
+  const cy = (txLienzo.height / 2 - txVista.oy) / sAntes;
+  ajustarLienzoTx();
+  if (txSeguirPalabra && txSel >= 0) {
+    centrarEnPalabra(txSel);
+  } else if (txVista.zoom === 1) {
+    vistaAjustada();
+  } else {
+    const s = escalaBase() * txVista.zoom;
+    txVista.ox = txLienzo.width / 2 - cx * s;
+    txVista.oy = txLienzo.height / 2 - cy * s;
+  }
+  dibujarTx();
+}
+
+// ----- No sacar del texto: los toques en la foto no cierran el teclado -----
+let txFocoTexto = false, txRango = null;
+function recordarFoco() {
+  txFocoTexto = document.activeElement === txTexto;
+  const sel = window.getSelection();
+  txRango = txFocoTexto && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+}
+function devolverFoco() {
+  if (!txFocoTexto || document.activeElement === txTexto) return;
+  txTexto.focus({ preventScroll: true });
+  if (txRango) {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(txRango);
+  }
+}
+[porId('txImagenPanel'), porId('txDivisor')].forEach(zona => {
+  zona.addEventListener('pointerdown', e => { recordarFoco(); e.preventDefault(); });
+  zona.addEventListener('mousedown', e => e.preventDefault());
+});
+
+porId('txMas').onclick = () => { zoomEn(1.5, txLienzo.width / 2, txLienzo.height / 2); devolverFoco(); };
+porId('txMenos').onclick = () => { zoomEn(1 / 1.5, txLienzo.width / 2, txLienzo.height / 2); devolverFoco(); };
+porId('txAjustar').onclick = () => { txSeguirPalabra = false; vistaAjustada(); dibujarTx(); devolverFoco(); };
 
 // Mover con un dedo, acercar con dos (pellizco)
 const punteros = new Map();
@@ -1953,6 +2021,7 @@ txLienzo.onpointermove = e => {
   const ahora = { x: e.clientX, y: e.clientY };
   punteros.set(e.pointerId, ahora);
   if (punteros.size === 1) {
+    txSeguirPalabra = false;
     txVista.ox += (ahora.x - antes.x) * dpr;
     txVista.oy += (ahora.y - antes.y) * dpr;
     dibujarTx();
@@ -1967,22 +2036,20 @@ txLienzo.onpointermove = e => {
 txLienzo.onpointerup = txLienzo.onpointercancel = e => {
   punteros.delete(e.pointerId);
   if (punteros.size < 2) distPellizco = 0;
+  if (punteros.size === 0) devolverFoco();
 };
 
-// Tocar una palabra: la foto se acerca a ella y la marca en rojo
+// Tocar una palabra: la foto se acerca a ella y la marca en rojo (y se puede escribir de una)
 txTexto.addEventListener('click', e => {
   const span = e.target.closest('.pal');
   if (!span) return;
   const i = Number(span.dataset.i);
-  const w = txPalabras[i];
-  if (!w || !txImagen) return;
+  if (!txPalabras[i] || !txImagen) return;
   txTexto.querySelectorAll('.activa').forEach(s => s.classList.remove('activa'));
   span.classList.add('activa');
   txSel = i;
-  txVista.zoom = Math.max(txVista.zoom, 2.5);
-  const s = escalaBase() * txVista.zoom;
-  txVista.ox = txLienzo.width / 2 - ((w.x0 + w.x1) / 2) * s;
-  txVista.oy = txLienzo.height / 2 - ((w.y0 + w.y1) / 2) * s;
+  txSeguirPalabra = true;
+  centrarEnPalabra(i);
   dibujarTx();
 });
 
@@ -2001,15 +2068,22 @@ txDivisor.onpointermove = e => {
 txDivisor.onpointerup = txDivisor.onpointercancel = () => {
   if (!moviendoDivisor) return;
   moviendoDivisor = false;
-  ajustarLienzoTx();
-  vistaAjustada();
-  dibujarTx();
+  reacomodarTx();
+  devolverFoco();
 };
+
+// Teclado abierto: la pantalla se achica; se esconden botones de abajo para dar espacio
+let alturaSinTeclado = window.innerHeight;
+let anchoPrevio = window.innerWidth;
 window.addEventListener('resize', () => {
-  if (!txDlg.classList.contains('visible') || !txImagen) return;
-  ajustarLienzoTx();
-  vistaAjustada();
-  dibujarTx();
+  if (window.innerWidth !== anchoPrevio) { // se giró el celular
+    anchoPrevio = window.innerWidth;
+    alturaSinTeclado = window.innerHeight;
+  } else if (window.innerHeight > alturaSinTeclado) {
+    alturaSinTeclado = window.innerHeight;
+  }
+  txDlg.classList.toggle('escribiendo', window.innerHeight < alturaSinTeclado * 0.8);
+  reacomodarTx();
 });
 
 // ----- Copiar, Word y compartir -----
@@ -2097,6 +2171,8 @@ async function crearWord() {
   return zip.generateAsync({ type: 'blob', mimeType: TIPO_WORD });
 }
 
+// Word: en Android se guarda directo en Descargas (Chrome no deja compartir Word);
+// en iPhone y computador se intenta Compartir, y si falla, también se descarga
 porId('txWord').onclick = async () => {
   const boton = porId('txWord');
   if (typeof JSZip === 'undefined') {
@@ -2104,20 +2180,31 @@ porId('txWord').onclick = async () => {
     return;
   }
   boton.textContent = '⏳ Creando...';
+  const nombre = `Texto escaneado ${fechaHora()}.docx`;
+  let blob;
   try {
-    const blob = await crearWord();
-    const nombre = `Texto escaneado ${fechaHora()}.docx`;
+    blob = await crearWord();
+  } catch (err) {
+    console.error(err);
+    alert('❌ No se pudo crear el documento de Word.');
+    boton.textContent = '📝 Word';
+    return;
+  }
+  const guardarEnDescargas = () => {
+    descargar(blob, nombre);
+    alert('📥 El Word quedó guardado en Descargas.\nÁbrelo desde la app Archivos.');
+  };
+  try {
     const archivo = new File([blob], nombre, { type: TIPO_WORD });
-    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    if (!esAndroid && navigator.canShare && navigator.canShare({ files: [archivo] })) {
       await navigator.share({ files: [archivo], title: nombre });
     } else {
-      descargar(blob, nombre); // muchos Android no dejan compartir Word: se guarda en Descargas
-      alert('📝 El documento de Word se guardó en Descargas.');
+      guardarEnDescargas();
     }
   } catch (err) {
     if (err.name !== 'AbortError') {
-      console.error(err);
-      alert('❌ No se pudo crear el documento de Word.');
+      console.log('Compartir Word no se pudo, se descarga:', err.message);
+      guardarEnDescargas();
     }
   } finally {
     boton.textContent = '📝 Word';
@@ -2153,10 +2240,12 @@ porId('txOtras').onclick = () => {
 function cerrarTexto() {
   txDetenerPedido = true;
   guardarEdicionTx();
-  txDlg.classList.remove('visible');
+  txDlg.classList.remove('visible', 'escribiendo');
   liberar(txImagen);
   txImagen = null;
   txPag = null;
   txPalabras = [];
+  txSel = -1;
+  txSeguirPalabra = false;
 }
 porId('txCerrar').onclick = cerrarTexto;
