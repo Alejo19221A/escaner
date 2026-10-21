@@ -1,9 +1,26 @@
-const VERSION = '1.5';
+const VERSION = '1.6';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
 
-// Cada página: { baseBlob, esquinas, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura, datosDlg }
+// ---------- 0. Registro de errores (para "Reportar problema") ----------
+// Solo guarda mensajes técnicos, nunca fotos, cédulas ni nombres
+const erroresRecientes = [];
+function anotarError(mensaje) {
+  const texto = String(mensaje).slice(0, 200);
+  erroresRecientes.push(`${new Date().toLocaleTimeString('es-CO')} – ${texto}`);
+  if (erroresRecientes.length > 5) erroresRecientes.shift();
+}
+const errorOriginal = console.error.bind(console);
+console.error = (...args) => {
+  anotarError(args.map(a => (a && a.message) ? a.message : a).join(' '));
+  errorOriginal(...args);
+};
+window.addEventListener('error', e => anotarError(e.message));
+window.addEventListener('unhandledrejection', e =>
+  anotarError(e.reason && e.reason.message ? e.reason.message : e.reason));
+
+// Cada página: { baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura, datosDlg }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
 const paginas = [];
 let modo = 'color';
@@ -31,8 +48,10 @@ function revisarOpenCV() {
 revisarOpenCV();
 
 setTimeout(() => {
-  if (!opencvListo) estado.textContent =
-    '⚠️ El recorte automático no cargó. Puedes escanear igual, pero sin recortar la hoja.';
+  if (!opencvListo) {
+    estado.textContent = '⚠️ El recorte automático no cargó. Puedes escanear igual, pero sin recortar la hoja.';
+    anotarError('OpenCV no cargó en 30 segundos');
+  }
 }, 30000);
 
 // ---------- Ayudantes ----------
@@ -61,6 +80,19 @@ function copiaReducida(origen, maxLado) {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(origen, 0, 0, c.width, c.height);
   return { canvas: c, escala: esc };
+}
+
+// Gira una imagen 90, 180 o 270 grados (sentido del reloj)
+function rotarCanvas(c, grados) {
+  const r = document.createElement('canvas');
+  const deLado = grados % 180 !== 0;
+  r.width = deLado ? c.height : c.width;
+  r.height = deLado ? c.width : c.height;
+  const ctx = r.getContext('2d');
+  ctx.translate(r.width / 2, r.height / 2);
+  ctx.rotate(grados * Math.PI / 180);
+  ctx.drawImage(c, -c.width / 2, -c.height / 2);
+  return r;
 }
 
 // ---------- 2. Tipo de documento: normal o paciente ----------
@@ -141,7 +173,7 @@ async function manejarFoto(archivo) {
 }
 
 async function agregarPagina(base, esquinas) {
-  const pagina = { baseBlob: await aBlob(base, 0.85), esquinas };
+  const pagina = { baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
   await procesarPagina(pagina, base);
   paginas.push(pagina);
   estado.textContent = esquinas
@@ -153,18 +185,24 @@ async function agregarPagina(base, esquinas) {
 }
 
 function cargarImagen(archivo) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('No se pudo abrir la imagen'));
     img.src = URL.createObjectURL(archivo);
   });
 }
 
-// Recorta y endereza directo al tamaño final, y aplica el filtro
+// Recorta, endereza (directo al tamaño final), gira si hace falta y aplica el filtro
 async function procesarPagina(pag, base) {
-  const rec = pag.esquinas ? enderezar(base, pag.esquinas) : base;
+  let rec = pag.esquinas ? enderezar(base, pag.esquinas) : base;
+  if (pag.giro) {
+    const girada = rotarCanvas(rec, pag.giro);
+    if (rec !== base) liberar(rec);
+    rec = girada;
+  }
   pag.recBlob = await aBlob(rec);
-  pag.lectura = null; // si cambió el recorte, hay que volver a leer la cédula
+  pag.lectura = null; // si cambió la página, hay que volver a leer la cédula
   await aplicarModo(pag, rec);
   if (rec !== base) liberar(rec);
 }
@@ -899,19 +937,19 @@ document.querySelectorAll('.modo').forEach(boton => {
   });
 });
 
-// ---------- 9. Mostrar, ordenar y borrar páginas ----------
+// ---------- 9. Mostrar, ordenar, girar y borrar páginas ----------
 function mostrarPaginas() {
   const contenedor = document.getElementById('paginas');
   contenedor.innerHTML = '';
   paginas.forEach((pag, i) => {
     contenedor.innerHTML += `
       <div class="pagina">
-        <img src="${pag.finalURL}" onclick="editarPagina(${i})">
+        <img src="${pag.finalURL}" onclick="editarPagina(${i})" title="Toca para ajustar el recorte">
         <span>${i + 1} · ${pag.formato || ''}</span>
         <button class="borrar" onclick="borrarPagina(${i})">✕</button>
         <div class="mover">
           <button onclick="moverPagina(${i}, -1)" ${i === 0 ? 'disabled' : ''}>◀</button>
-          <small>✏️ Toca para ajustar</small>
+          <button onclick="rotarPagina(${i})" style="width:auto; padding:0 10px;">⟳ Girar</button>
           <button onclick="moverPagina(${i}, 1)" ${i === paginas.length - 1 ? 'disabled' : ''}>▶</button>
         </div>
       </div>`;
@@ -931,6 +969,29 @@ function moverPagina(i, direccion) {
   mostrarPaginas();
 }
 
+// Gira la página 90° (sentido del reloj); el giro se guarda para cuando se reajuste el recorte
+async function rotarPagina(i) {
+  const pag = paginas[i];
+  await mostrarCargando(true);
+  try {
+    const rec = await aCanvas(pag.recBlob);
+    const girada = rotarCanvas(rec, 90);
+    liberar(rec);
+    pag.giro = ((pag.giro || 0) + 90) % 360;
+    pag.recBlob = await aBlob(girada);
+    pag.lectura = null;
+    await aplicarModo(pag, girada);
+    liberar(girada);
+    mostrarPaginas();
+    if (tipoDoc === 'paciente' && paginas[0] === pag) leerPagina(pag); // volver a leer, ya derecha
+  } catch (err) {
+    console.error(err);
+    estado.textContent = '❌ No se pudo girar la página.';
+  } finally {
+    mostrarCargando(false);
+  }
+}
+
 async function editarPagina(i) {
   if (!opencvListo) return;
   const pag = paginas[i];
@@ -943,7 +1004,7 @@ async function editarPagina(i) {
     if (esquinas) {
       await mostrarCargando(true);
       pag.esquinas = esquinas;
-      await procesarPagina(pag, base);
+      await procesarPagina(pag, base); // mantiene el giro que tenía
       mostrarPaginas();
     }
   } finally {
@@ -1385,3 +1446,47 @@ function revisarInactividad() {
 }
 setInterval(revisarInactividad, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarInactividad(); });
+
+// ---------- 14. Reportar problema (sin fotos, cédulas ni nombres) ----------
+function armarReporte(descripcion) {
+  return [
+    '🐞 Reporte – Escáner de documentos',
+    `Qué pasó: ${descripcion || '(sin descripción)'}`,
+    '',
+    `Versión: ${VERSION}`,
+    `Fecha: ${new Date().toLocaleString('es-CO')}`,
+    `Navegador: ${navigator.userAgent}`,
+    `Pantalla: ${screen.width} x ${screen.height}`,
+    `Memoria: ${navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'desconocida'}`,
+    `Recorte automático (OpenCV): ${opencvListo ? 'cargado' : 'no cargó'}`,
+    `Lector de texto (OCR): ${typeof Tesseract !== 'undefined' ? 'disponible' : 'no cargó'}`,
+    `Tipo: ${tipoDoc} · Filtro: ${modo} · Páginas en pantalla: ${paginas.length}`,
+    `Compartir disponible: ${puedeCompartir() ? 'sí' : 'no'}`,
+    '',
+    'Últimos errores:',
+    ...(erroresRecientes.length ? erroresRecientes : ['(ninguno)']),
+    '',
+    'Este reporte no incluye fotos, cédulas ni nombres.'
+  ].join('\n');
+}
+
+document.getElementById('reportar').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const descripcion = prompt('¿Qué pasó? Cuéntalo en pocas palabras (sin datos de pacientes):', '');
+  if (descripcion === null) return; // canceló
+  const texto = armarReporte(descripcion.trim());
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Reporte Escáner', text: texto });
+      return;
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+  }
+  try {
+    await navigator.clipboard.writeText(texto);
+    alert('📋 Reporte copiado. Pégalo en Teams o WhatsApp.');
+  } catch {
+    prompt('Copia este reporte y envíalo:', texto);
+  }
+});
