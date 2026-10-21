@@ -10,6 +10,7 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 .botonSec { display: block; padding: 10px; margin: 0 0 10px; color: #1a73e8;
             font-size: 15px; text-decoration: underline; cursor: pointer; }
 #pdf { background: #188038; }
+#textoBtn { display: none; background: #5e35b1; }
 #nuevo { display: none; background: white; color: #d93025; border: 2px solid #d93025; font-size: 16px; }
 
 /* Tipo de documento */
@@ -100,3 +101,92 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #dlgGuardar { background: #188038; }
 #dlgCompartir { display: block; width: 100%; margin-top: 8px; background: #1a73e8; }
 #dialogo button:disabled { background: #bbb; color: white; }
+
+/* Ventana de reportar problema */
+#reporteDlg { display: none; position: fixed; inset: 0; background: #0009; z-index: 29;
+              align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
+#reporteDlg.visible { display: flex; }
+#reporteDlg .caja { background: white; border-radius: 16px; padding: 18px; width: 100%;
+                    max-width: 460px; text-align: left; box-sizing: border-box; }
+#reporteDlg h2 { margin: 0 0 10px; color: #1a3d6d; font-size: 20px; }
+#reporteDlg label[for] { display: block; font-weight: bold; color: #333; margin-bottom: 6px; }
+#reporteDlg textarea { width: 100%; box-sizing: border-box; padding: 11px; font-size: 16px;
+                       font-family: inherit; border: 2px solid #ccc; border-radius: 10px; }
+#reporteDlg textarea:focus { border-color: #1a73e8; outline: none; }
+#repFotoNombre { font-size: 13px; color: #555; margin: 0 0 8px; word-break: break-all; }
+#repCancelar { background: #777; }
+#repEnviar { background: #1a73e8; }
+
+/* Imagen a texto */
+#textoDlg { display: none; position: fixed; inset: 0; background: #f2f4f7; z-index: 28;
+            flex-direction: column; text-align: left; }
+#textoDlg.visible { display: flex; }
+.txCabecera { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+              background: white; border-bottom: 1px solid #ddd; }
+.txCabecera button { border: none; background: #eee; border-radius: 8px; width: 40px;
+                     height: 40px; font-size: 18px; }
+#txTitulo { font-weight: bold; color: #1a3d6d; font-size: 17px; flex: 1; }
+#txElegir, #txLeyendo, #txRevisar { display: none; flex: 1; flex-direction: column;
+                                    min-height: 0; padding: 12px; box-sizing: border-box; }
+#txElegir.activo, #txLeyendo.activo, #txRevisar.activo { display: flex; }
+.txAyuda { margin: 0 0 8px; color: #333; }
+.txAcciones { display: flex; gap: 8px; margin-bottom: 10px; }
+.txAcciones button { flex: 1; padding: 10px; border: 2px solid #5e35b1; background: white;
+                     color: #5e35b1; border-radius: 10px; font-size: 15px; }
+#txMiniaturas { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr);
+                gap: 10px; align-content: start; }
+.txMini { position: relative; border: 3px solid transparent; border-radius: 8px;
+          overflow: hidden; background: white; cursor: pointer; }
+.txMini.marcada { border-color: #5e35b1; }
+.txMini img { width: 100%; display: block; }
+.txMini span { position: absolute; top: 4px; left: 4px; background: #000a; color: white;
+               font-size: 12px; padding: 1px 6px; border-radius: 5px; }
+.txMini .check { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px;
+                 border-radius: 50%; background: white; border: 2px solid #5e35b1;
+                 display: flex; align-items: center; justify-content: center;
+                 font-size: 15px; color: #5e35b1; box-sizing: border-box; }
+.txMini.marcada .check { background: #5e35b1; color: white; }
+.txMini .leida { position: absolute; bottom: 0; left: 0; right: 0; background: #188038e0;
+                 color: white; font-size: 12px; text-align: center; padding: 2px; }
+#txLeer { background: #5e35b1; margin-bottom: 0; }
+#txLeyendo { justify-content: center; align-items: center; text-align: center; }
+#txProgresoTexto { font-size: 17px; color: #333; }
+.txBarra { width: 90%; max-width: 420px; height: 14px; background: #ddd; border-radius: 7px;
+           overflow: hidden; margin: 10px 0 20px; }
+#txBarraRelleno { height: 100%; width: 0; background: #5e35b1; transition: width 0.3s; }
+#txDetener { padding: 12px 24px; font-size: 16px; border: none; border-radius: 10px;
+             background: #d93025; color: white; }
+#txPestanas { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 8px; flex-shrink: 0; }
+#txPestanas button { padding: 8px 14px; border: 2px solid #5e35b1; background: white;
+                     color: #5e35b1; border-radius: 20px; font-size: 14px; white-space: nowrap; }
+#txPestanas button.activa { background: #5e35b1; color: white; }
+#txPanel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#txImagenPanel { position: relative; flex: 0 0 45%; background: #222; border-radius: 10px;
+                 overflow: hidden; min-height: 0; min-width: 0; }
+#txLienzo { width: 100%; height: 100%; display: block; touch-action: none; }
+.txZoom { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+.txZoom button { width: 40px; height: 40px; border: none; border-radius: 50%;
+                 background: #ffffffdd; font-size: 20px; }
+#txDivisor { flex: 0 0 16px; cursor: row-resize; touch-action: none; display: flex;
+             align-items: center; justify-content: center; }
+#txDivisor::after { content: ''; width: 50px; height: 5px; border-radius: 3px; background: #bbb; }
+#txTextoPanel { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
+                background: white; border-radius: 10px; padding: 8px; box-sizing: border-box; }
+.txLeyenda { margin: 0 0 6px; font-size: 12px; color: #777; }
+.muestraDudosa, #txTexto .dudosa { background: #fff176; }
+#txTexto { flex: 1; overflow-y: auto; font-size: 16px; line-height: 1.6; outline: none;
+           word-break: break-word; }
+#txTexto .activa { outline: 2px solid #d93025; border-radius: 3px; }
+.txPie { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px;
+         flex-shrink: 0; }
+.txPie button { padding: 12px 4px; font-size: 15px; border: none; border-radius: 10px;
+                color: white; background: #5e35b1; }
+#txWord { background: #1a5bbf; }
+#txOtras { grid-column: 1 / -1; background: #777; padding: 10px 4px; font-size: 14px; }
+
+/* En computador o con el celular acostado: foto y texto lado a lado */
+@media (orientation: landscape), (min-width: 800px) {
+  #txPanel { flex-direction: row; }
+  #txDivisor { cursor: col-resize; }
+  #txDivisor::after { width: 5px; height: 50px; }
+}

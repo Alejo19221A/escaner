@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=1.6.2">
+  <link rel="stylesheet" href="estilos.css?v=1.7.1">
   <script src="libs/jspdf.umd.min.js"></script>
+  <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
   <script async src="libs/opencv.js"></script>
 </head>
@@ -38,6 +39,7 @@
   <div id="paginas"></div>
 
   <button class="boton" id="pdf" disabled>💾 Guardar PDF</button>
+  <button class="boton" id="textoBtn">🔤 Extraer texto</button>
   <button class="boton" id="nuevo">🗑️ Empezar de nuevo</button>
 
   <p id="version"></p>
@@ -86,8 +88,79 @@
     </div>
   </div>
 
+  <!-- Imagen a texto -->
+  <div id="textoDlg">
+    <div class="txCabecera">
+      <button id="txCerrar" aria-label="Cerrar">✕</button>
+      <span id="txTitulo">🔤 Extraer texto</span>
+    </div>
+
+    <!-- Paso 1: elegir qué páginas leer -->
+    <div id="txElegir">
+      <p class="txAyuda">Toca las páginas que quieres leer</p>
+      <div class="txAcciones">
+        <button id="txTodas">Todas</button>
+        <button id="txNinguna">Ninguna</button>
+      </div>
+      <div id="txMiniaturas"></div>
+      <button class="boton" id="txLeer">🔍 Leer</button>
+    </div>
+
+    <!-- Paso 2: leyendo -->
+    <div id="txLeyendo">
+      <p id="txProgresoTexto">Leyendo...</p>
+      <div class="txBarra"><div id="txBarraRelleno"></div></div>
+      <button id="txDetener">⏹ Detener</button>
+    </div>
+
+    <!-- Paso 3: revisar texto con la foto -->
+    <div id="txRevisar">
+      <div id="txPestanas"></div>
+      <div id="txPanel">
+        <div id="txImagenPanel">
+          <canvas id="txLienzo"></canvas>
+          <div class="txZoom">
+            <button id="txMenos" aria-label="Alejar">−</button>
+            <button id="txMas" aria-label="Acercar">+</button>
+            <button id="txAjustar" aria-label="Encuadrar">⤢</button>
+          </div>
+        </div>
+        <div id="txDivisor"></div>
+        <div id="txTextoPanel">
+          <p class="txLeyenda"><span class="muestraDudosa">amarillo</span> = palabra dudosa · toca una palabra para verla en la foto · puedes corregir el texto</p>
+          <div id="txTexto" contenteditable="true" spellcheck="false"></div>
+        </div>
+      </div>
+      <div class="txPie">
+        <button id="txCopiar">📋 Copiar</button>
+        <button id="txWord">📝 Word</button>
+        <button id="txCompartir">📤 Texto</button>
+        <button id="txOtras">📄 Leer otras páginas</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ventana para reportar un problema -->
+  <div id="reporteDlg">
+    <div class="caja">
+      <h2>🐞 Reportar problema</h2>
+      <label for="repTexto">¿Qué pasó?</label>
+      <textarea id="repTexto" rows="5" placeholder="Ejemplo: al tocar Compartir no pasó nada"></textarea>
+      <label class="botonSec">
+        📎 Adjuntar captura de pantalla (opcional)
+        <input type="file" accept="image/*" id="repFoto" hidden>
+      </label>
+      <p id="repFotoNombre"></p>
+      <p class="aviso">⚠️ Adjunta solo capturas de la pantalla de la app.</p>
+      <div class="filaDlg">
+        <button id="repCancelar">Cancelar</button>
+        <button id="repEnviar">📤 Enviar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="cargando"><div>⏳ Procesando...</div></div>
 
-  <script src="app.js?v=1.6.2"></script>
+  <script src="app.js?v=1.7.1"></script>
 </body>
 </html>

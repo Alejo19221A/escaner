@@ -1,9 +1,11 @@
-const VERSION = '1.6.2';
+const VERSION = '1.7.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
 const MAX_ARCHIVOS_COMPARTIR = 10;               // Chrome deja compartir máximo 10 archivos a la vez
 const MAX_BYTES_COMPARTIR = 45 * 1024 * 1024;    // y un tamaño total limitado (dejamos margen)
+const UMBRAL_DUDOSA = 70;      // confianza del lector (0-100) por debajo de la cual una palabra sale en amarillo
+const TIPO_WORD = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 // ---------- 0. Registro de errores (para "Reportar problema") ----------
 // Solo guarda mensajes técnicos, nunca fotos, cédulas ni nombres
@@ -22,7 +24,8 @@ window.addEventListener('error', e => anotarError(e.message));
 window.addEventListener('unhandledrejection', e =>
   anotarError(e.reason && e.reason.message ? e.reason.message : e.reason));
 
-// Cada página: { baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato, lectura, datosDlg }
+// Cada página: { baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato,
+//                lectura, datosDlg, ocrPromesa, ocrResultado, ocrListo, ocrHTML }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
 const paginas = [];
 let modo = 'color';
@@ -72,6 +75,22 @@ async function aCanvas(blob) {
 function liberar(c) { if (c) { c.width = 0; c.height = 0; } }
 const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+// Evita que un texto leído se interprete como código de la página
+function escaparHTML(texto) {
+  return String(texto).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Área de un polígono (para saber qué tan grande es un recuadro)
+function areaPoligono(o) {
+  let area = 0;
+  for (let i = 0; i < o.length; i++) {
+    const p1 = o[i], p2 = o[(i + 1) % o.length];
+    area += p1.x * p2.y - p2.x * p1.y;
+  }
+  return Math.abs(area) / 2;
+}
+
 // Copia reducida de una imagen (rápido, lo hace el navegador)
 function copiaReducida(origen, maxLado) {
   const esc = Math.min(1, maxLado / Math.max(origen.width, origen.height));
@@ -95,6 +114,15 @@ function rotarCanvas(c, grados) {
   ctx.rotate(grados * Math.PI / 180);
   ctx.drawImage(c, -c.width / 2, -c.height / 2);
   return r;
+}
+
+// Si la página cambió (recorte o giro), hay que volver a leer su texto
+function olvidarLectura(pag) {
+  pag.lectura = null;
+  pag.ocrPromesa = null;
+  pag.ocrResultado = null;
+  pag.ocrListo = false;
+  pag.ocrHTML = null;
 }
 
 // ---------- 2. Tipo de documento: normal o paciente ----------
@@ -204,7 +232,7 @@ async function procesarPagina(pag, base) {
     rec = girada;
   }
   pag.recBlob = await aBlob(rec);
-  pag.lectura = null; // si cambió la página, hay que volver a leer la cédula
+  olvidarLectura(pag);
   await aplicarModo(pag, rec);
   if (rec !== base) liberar(rec);
 }
@@ -248,6 +276,10 @@ function detectarCandidatos(base, tamano = 800) {
   cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
   cv.GaussianBlur(gris, gris, new cv.Size(5, 5), 0);
   const areaTotal = gris.rows * gris.cols;
+
+  // Plan B: un recuadro alrededor del texto impreso (sirve cuando la hoja y la mesa son blancas)
+  let recuadroTexto = null;
+  try { recuadroTexto = rectanguloDelTexto(gris); } catch (err) { console.error(err); }
 
   // Realzar contraste local: hace visibles los bordes de hoja blanca sobre fondo claro
   const realzado = new cv.Mat();
@@ -304,7 +336,7 @@ function detectarCandidatos(base, tamano = 800) {
     .forEach(m => m.delete());
 
   // Quedarse con hasta 3 propuestas que sean distintas entre sí
-  const elegidas = [];
+  let elegidas = [];
   for (const c of finales) {
     const o = ordenarEsquinas(c.q);
     const repetida = elegidas.some(e =>
@@ -314,11 +346,61 @@ function detectarCandidatos(base, tamano = 800) {
     if (elegidas.length === 3) break;
   }
 
+  // Sumar el recuadro del texto: primero si la detección normal falló o tomó casi toda la foto
+  if (recuadroTexto) {
+    const t = ordenarEsquinas(recuadroTexto);
+    const primeraSospechosa = !elegidas.length || areaPoligono(elegidas[0]) / areaTotal > 0.75;
+    if (primeraSospechosa) elegidas = [t, ...elegidas].slice(0, 3);
+    else if (elegidas.length < 3) elegidas.push(t);
+  }
+
   const lim = (v, max) => Math.min(max, Math.max(0, v));
   return elegidas.map(o => o.map(p => ({
     x: lim(p.x / escala, base.width),
     y: lim(p.y / escala, base.height)
   })));
+}
+
+// Busca dónde está el texto impreso y arma un recuadro inclinado alrededor, con margen
+function rectanguloDelTexto(gris) {
+  const W = gris.cols, H = gris.rows, areaTotal = W * H;
+  const bin = new cv.Mat();
+  const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(25, 9));
+  cv.adaptiveThreshold(gris, bin, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 25, 15);
+  cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k); // junta las letras en bloques de texto
+  const contornos = new cv.MatVector(), jerarquia = new cv.Mat();
+  cv.findContours(bin, contornos, jerarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  const puntos = [];
+  for (let i = 0; i < contornos.size(); i++) {
+    const c = contornos.get(i);
+    const r = cv.boundingRect(c);
+    const a = r.width * r.height;
+    // Ignorar manchitas, objetos grandes y cosas pegadas al borde de la foto
+    const adentro = r.x > 3 && r.y > 3 && r.x + r.width < W - 3 && r.y + r.height < H - 3;
+    if (adentro && a > areaTotal * 0.0005 && a < areaTotal * 0.3) {
+      for (let j = 0; j < c.data32S.length; j += 2) puntos.push(c.data32S[j], c.data32S[j + 1]);
+    }
+    c.delete();
+  }
+  [bin, k, contornos, jerarquia].forEach(m => m.delete());
+  if (puntos.length < 40) return null;
+
+  const mat = cv.matFromArray(puntos.length / 2, 1, cv.CV_32SC2, puntos);
+  const rect = cv.minAreaRect(mat);
+  mat.delete();
+
+  // Margen alrededor del texto, como el blanco de la hoja
+  const ampliado = {
+    center: rect.center,
+    size: { width: rect.size.width * 1.12 + W * 0.02, height: rect.size.height * 1.12 + H * 0.02 },
+    angle: rect.angle
+  };
+  if ((ampliado.size.width * ampliado.size.height) / areaTotal < 0.08) return null;
+  return cv.RotatedRect.points(ampliado).map(p => ({
+    x: Math.min(W, Math.max(0, p.x)),
+    y: Math.min(H, Math.max(0, p.y))
+  }));
 }
 
 // Saca una figura de 4 lados de las 2 manchas más grandes
@@ -383,12 +465,7 @@ function puntaje(q, gris, mapaBordes, areaTotal, conContraste) {
   }
 
   // 2. Tamaño
-  let area = 0;
-  for (let i = 0; i < 4; i++) {
-    const p1 = o[i], p2 = o[(i + 1) % 4];
-    area += p1.x * p2.y - p2.x * p1.y;
-  }
-  const fraccion = Math.abs(area) / 2 / areaTotal;
+  const fraccion = areaPoligono(o) / areaTotal;
   if (fraccion < 0.15 || fraccion > 0.99) return 0;
 
   // 3. ¿Los 4 lados caen sobre líneas reales de la foto? (y cuántos van por el borde de la foto)
@@ -961,6 +1038,7 @@ function mostrarPaginas() {
   btnPdf.textContent = paginas.length
     ? `💾 Guardar PDF (${paginas.length} ${paginas.length === 1 ? 'página' : 'páginas'})`
     : '💾 Guardar PDF';
+  document.getElementById('textoBtn').style.display = paginas.length ? 'block' : 'none';
   document.getElementById('nuevo').style.display = paginas.length ? 'block' : 'none';
 }
 
@@ -981,7 +1059,7 @@ async function rotarPagina(i) {
     liberar(rec);
     pag.giro = ((pag.giro || 0) + 90) % 360;
     pag.recBlob = await aBlob(girada);
-    pag.lectura = null;
+    olvidarLectura(pag);
     await aplicarModo(pag, girada);
     liberar(girada);
     mostrarPaginas();
@@ -1053,8 +1131,10 @@ async function crearPDF(lista = paginas) {
   return doc.output('blob');
 }
 
-// ---------- 11. Leer la cédula con OCR (todo dentro del celular) ----------
+// ---------- 11. Lector de texto (OCR), todo dentro del celular ----------
 let trabajadorOCR = null;
+let progresoActualOCR = 0;      // avance de la página que se está leyendo (0 a 1)
+let alAvanzarOCR = null;        // función que actualiza la barra, si la ventana de texto está abierta
 const rutaCompleta = r => new URL(r, location.href).href;
 
 function obtenerOCR() {
@@ -1065,30 +1145,62 @@ function obtenerOCR() {
       corePath: rutaCompleta('libs/tesseract/'),
       langPath: rutaCompleta('libs/tesseract/'),
       workerBlobURL: false,
-      gzip: true
+      gzip: true,
+      logger: m => {
+        if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+          progresoActualOCR = m.progress;
+          if (alAvanzarOCR) alAvanzarOCR();
+        }
+      }
     }).catch(err => { trabajadorOCR = null; throw err; });
   }
   return trabajadorOCR;
 }
 
-// Lee una página una sola vez y guarda el resultado
-function leerPagina(pag) {
-  if (!pag.lectura) {
-    pag.lectura = (async () => {
+// Organiza lo leído en renglones de palabras, cada una con su confianza y su recuadro
+function lineasDe(data) {
+  let lineas = Array.isArray(data.lines) ? data.lines : [];
+  if (!lineas.length) {
+    (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p =>
+      (p.lines || []).forEach(l => lineas.push(l))));
+  }
+  return lineas
+    .map(l => (l.words || []).map(w => ({ t: w.text, c: w.confidence, b: w.bbox })))
+    .filter(l => l.length);
+}
+
+// Lee una página completa UNA sola vez (lo usan la cédula y "Extraer texto")
+function ocrCompleto(pag) {
+  if (!pag.ocrPromesa) {
+    pag.ocrPromesa = (async () => {
       const rec = await aCanvas(pag.recBlob);
       const { canvas: c } = copiaReducida(rec, 2000);
       liberar(rec);
-      blancoNegro(c); // el OCR lee mejor en blanco y negro
+      blancoNegro(c); // el lector funciona mejor en blanco y negro
+      const ancho = c.width;
       const trabajador = await obtenerOCR();
-      const { data } = await trabajador.recognize(c);
+      const { data } = await trabajador.recognize(c, {}, { text: true, blocks: true });
       liberar(c);
-      console.log('Texto leído:', data.text);
-      return extraerDatos(data.text);
+      const resultado = { texto: data.text || '', lineas: lineasDe(data), ancho };
+      pag.ocrResultado = resultado;
+      pag.ocrListo = true;
+      console.log('Texto leído:', resultado.texto);
+      return resultado;
     })().catch(err => {
       console.error(err);
-      pag.lectura = null;
-      return { cedula: '', nombre: '' };
+      pag.ocrPromesa = null;
+      throw err;
     });
+  }
+  return pag.ocrPromesa;
+}
+
+// Para la cédula: usa la misma lectura
+function leerPagina(pag) {
+  if (!pag.lectura) {
+    pag.lectura = ocrCompleto(pag)
+      .then(r => extraerDatos(r.texto))
+      .catch(() => { pag.lectura = null; return { cedula: '', nombre: '' }; });
   }
   return pag.lectura;
 }
@@ -1519,6 +1631,7 @@ function revisarInactividad() {
   if (!paginas.length) return;
   if (Date.now() - ultimaActividad < MINUTOS_INACTIVIDAD * 60000) return;
   if (document.getElementById('editor').classList.contains('visible')) return;
+  cerrarTexto();
   cerrarDialogo();
   empezarDeNuevo();
   estado.textContent = '🔒 Las páginas se borraron por inactividad (protección de datos)';
@@ -1526,46 +1639,524 @@ function revisarInactividad() {
 setInterval(revisarInactividad, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarInactividad(); });
 
-// ---------- 14. Reportar problema (sin fotos, cédulas ni nombres) ----------
+// ---------- 14. Reportar problema (sin datos de pacientes) ----------
+// Celular y navegador en pocas palabras: "Android 14 · Chrome 130", "iPhone · Safari"
+function resumirNavegador() {
+  const ua = navigator.userAgent;
+  const android = ua.match(/Android\s([\d.]+)/);
+  const iphone = /iPhone|iPad/.test(ua);
+  const chrome = ua.match(/(?:Chrome|CriOS)\/(\d+)/);
+  const sistema = android ? `Android ${android[1].split('.')[0]}` : iphone ? 'iPhone' : 'Computador';
+  const navegador = chrome ? `Chrome ${chrome[1]}` : /Safari/.test(ua) ? 'Safari' : 'Otro navegador';
+  return `${sistema} · ${navegador}`;
+}
+
 function armarReporte(descripcion) {
+  let estadoApp = '✅ La app cargó completa';
+  if (!opencvListo) estadoApp = '⚠️ El recorte automático no cargó';
+  else if (typeof Tesseract === 'undefined') estadoApp = '⚠️ El lector de texto no cargó';
+  else if (typeof JSZip === 'undefined') estadoApp = '⚠️ La librería de Word no cargó';
+
+  const tipo = tipoDoc === 'paciente' ? 'Paciente' : 'Documento normal';
+  const hora = new Date().toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' });
+
   return [
     '🐞 Reporte – Escáner de documentos',
+    '',
     `Qué pasó: ${descripcion || '(sin descripción)'}`,
     '',
-    `Versión: ${VERSION}`,
-    `Fecha: ${new Date().toLocaleString('es-CO')}`,
-    `Navegador: ${navigator.userAgent}`,
-    `Pantalla: ${screen.width} x ${screen.height}`,
-    `Memoria: ${navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'desconocida'}`,
-    `Recorte automático (OpenCV): ${opencvListo ? 'cargado' : 'no cargó'}`,
-    `Lector de texto (OCR): ${typeof Tesseract !== 'undefined' ? 'disponible' : 'no cargó'}`,
-    `Tipo: ${tipoDoc} · Filtro: ${modo} · Páginas en pantalla: ${paginas.length}`,
-    `Compartir disponible: ${puedeCompartir() ? 'sí' : 'no'}`,
+    `📱 Celular: ${resumirNavegador()}`,
+    `📅 Fecha: ${hora}`,
+    `🔢 Versión de la app: ${VERSION}`,
+    estadoApp,
+    `📄 Estaba escaneando: ${paginas.length} ${paginas.length === 1 ? 'página' : 'páginas'} (${tipo})`,
     '',
-    'Últimos errores:',
-    ...(erroresRecientes.length ? erroresRecientes : ['(ninguno)']),
-    '',
-    'Este reporte no incluye fotos, cédulas ni nombres.'
+    'Errores recientes:',
+    ...(erroresRecientes.length ? erroresRecientes.map(e => `• ${e}`) : ['• Ninguno'])
   ].join('\n');
 }
 
-document.getElementById('reportar').addEventListener('click', async (e) => {
+const repDlg = document.getElementById('reporteDlg');
+const repTexto = document.getElementById('repTexto');
+const repFoto = document.getElementById('repFoto');
+const repFotoNombre = document.getElementById('repFotoNombre');
+
+document.getElementById('reportar').addEventListener('click', (e) => {
   e.preventDefault();
-  const descripcion = prompt('¿Qué pasó? Cuéntalo en pocas palabras (sin datos de pacientes):', '');
-  if (descripcion === null) return; // canceló
-  const texto = armarReporte(descripcion.trim());
+  repTexto.value = '';
+  repFoto.value = '';
+  repFotoNombre.textContent = '';
+  repDlg.classList.add('visible');
+  repTexto.focus();
+});
+
+repFoto.addEventListener('change', () => {
+  const foto = repFoto.files[0];
+  repFotoNombre.textContent = foto ? `📎 ${foto.name}` : '';
+});
+
+document.getElementById('repCancelar').addEventListener('click', () => repDlg.classList.remove('visible'));
+
+// "Enviar" abre Compartir al instante (con el texto y la captura, si hay)
+document.getElementById('repEnviar').addEventListener('click', async () => {
+  const texto = armarReporte(repTexto.value.trim());
+  const foto = repFoto.files[0];
   try {
+    if (foto && navigator.canShare && navigator.canShare({ files: [foto], text: texto })) {
+      await navigator.share({ title: 'Reporte Escáner', text: texto, files: [foto] });
+      repDlg.classList.remove('visible');
+      return;
+    }
     if (navigator.share) {
       await navigator.share({ title: 'Reporte Escáner', text: texto });
+      repDlg.classList.remove('visible');
       return;
     }
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return; // cerró el menú de compartir
+    console.error(err);
   }
   try {
     await navigator.clipboard.writeText(texto);
-    alert('📋 Reporte copiado. Pégalo en Teams o WhatsApp.');
+    alert('📋 No se pudo abrir Compartir. El reporte se copió: pégalo en Teams o WhatsApp.');
+    repDlg.classList.remove('visible');
   } catch {
-    prompt('Copia este reporte y envíalo:', texto);
+    alert('❌ No se pudo enviar el reporte.');
   }
 });
+
+// ---------- 15. Imagen a texto: elegir páginas, leer y revisar con la foto al lado ----------
+const porId = id => document.getElementById(id);
+const txDlg = porId('textoDlg');
+const txLienzo = porId('txLienzo');
+const txTexto = porId('txTexto');
+let txSeleccion = new Set();   // páginas marcadas para leer
+let txDetenerPedido = false;
+let txListaRevision = [];      // páginas que se están revisando (pestañas)
+let txPag = null;              // página que se ve ahora
+let txImagen = null;           // foto de esa página, en color
+let txPalabras = [];           // palabras con su recuadro en la foto
+let txSel = -1;                // palabra tocada
+let txVista = { zoom: 1, ox: 0, oy: 0 };
+
+function mostrarPaso(paso) {
+  ['Elegir', 'Leyendo', 'Revisar'].forEach(p => porId('tx' + p).classList.toggle('activo', p === paso));
+}
+
+// Abrir: si hay una sola página, la lee de una; si hay varias, primero se eligen
+porId('textoBtn').addEventListener('click', () => {
+  if (!paginas.length) return;
+  txSeleccion = new Set();
+  paginas.forEach((p, i) => { if (p.ocrListo) txSeleccion.add(i); });
+  txDlg.classList.add('visible');
+  if (paginas.length === 1) {
+    txSeleccion.add(0);
+    leerSeleccion();
+    return;
+  }
+  dibujarMiniaturasTx();
+  mostrarPaso('Elegir');
+});
+
+function dibujarMiniaturasTx() {
+  const cont = porId('txMiniaturas');
+  cont.innerHTML = '';
+  paginas.forEach((p, i) => {
+    const marcada = txSeleccion.has(i);
+    const d = document.createElement('div');
+    d.className = 'txMini' + (marcada ? ' marcada' : '');
+    d.innerHTML = `<img src="${p.finalURL}"><span>${i + 1}</span>
+      <div class="check">${marcada ? '✓' : ''}</div>
+      ${p.ocrListo ? '<div class="leida">✓ Leída</div>' : ''}`;
+    d.onclick = () => {
+      if (txSeleccion.has(i)) txSeleccion.delete(i); else txSeleccion.add(i);
+      dibujarMiniaturasTx();
+    };
+    cont.appendChild(d);
+  });
+  const n = txSeleccion.size;
+  const btn = porId('txLeer');
+  btn.disabled = n === 0;
+  btn.textContent = n ? `🔍 Leer ${n} ${n === 1 ? 'página' : 'páginas'}` : 'Marca al menos una página';
+}
+porId('txTodas').onclick = () => { paginas.forEach((_, i) => txSeleccion.add(i)); dibujarMiniaturasTx(); };
+porId('txNinguna').onclick = () => { txSeleccion.clear(); dibujarMiniaturasTx(); };
+porId('txLeer').onclick = () => leerSeleccion();
+
+// Lee las páginas elegidas (las que ya se leyeron no se vuelven a leer)
+async function leerSeleccion() {
+  const lista = [...txSeleccion].sort((a, b) => a - b).map(i => paginas[i]).filter(Boolean);
+  const pendientes = lista.filter(p => !p.ocrListo);
+  txDetenerPedido = false;
+
+  if (pendientes.length) {
+    mostrarPaso('Leyendo');
+    const tiempos = [], fallidas = [];
+    for (let k = 0; k < pendientes.length; k++) {
+      if (txDetenerPedido || !txDlg.classList.contains('visible')) break;
+      const pag = pendientes[k];
+      const numero = paginas.indexOf(pag) + 1;
+      const promedio = tiempos.length ? tiempos.reduce((a, b) => a + b, 0) / tiempos.length : 0;
+      const faltan = promedio ? ` · faltan unos ${Math.ceil(promedio * (pendientes.length - k) / 1000)} s` : ' · unos segundos...';
+      porId('txProgresoTexto').textContent = `Leyendo página ${numero} (${k + 1} de ${pendientes.length})${faltan}`;
+      progresoActualOCR = 0;
+      alAvanzarOCR = () => {
+        porId('txBarraRelleno').style.width = `${Math.round((k + progresoActualOCR) / pendientes.length * 100)}%`;
+      };
+      alAvanzarOCR();
+      const inicio = Date.now();
+      try { await ocrCompleto(pag); } catch { fallidas.push(numero); }
+      tiempos.push(Date.now() - inicio);
+    }
+    alAvanzarOCR = null;
+    porId('txBarraRelleno').style.width = '0';
+    if (!txDlg.classList.contains('visible')) return;
+    if (fallidas.length) alert(`⚠️ No se pudo leer: página ${fallidas.join(', ')}`);
+  }
+
+  const leidas = lista.filter(p => p.ocrListo);
+  if (!leidas.length) {
+    if (paginas.length === 1) cerrarTexto();
+    else { dibujarMiniaturasTx(); mostrarPaso('Elegir'); }
+    return;
+  }
+  mostrarPaso('Revisar');
+  dibujarPestanas(leidas);
+  await mostrarPaginaTx(leidas[0]);
+}
+
+porId('txDetener').onclick = () => {
+  txDetenerPedido = true;
+  porId('txProgresoTexto').textContent = '⏹ Deteniendo al terminar esta página...';
+};
+
+function dibujarPestanas(lista) {
+  txListaRevision = lista;
+  const cont = porId('txPestanas');
+  cont.innerHTML = '';
+  lista.forEach(p => {
+    const b = document.createElement('button');
+    b.textContent = `Página ${paginas.indexOf(p) + 1}`;
+    b.onclick = () => mostrarPaginaTx(p);
+    cont.appendChild(b);
+  });
+  cont.style.display = lista.length > 1 ? 'flex' : 'none';
+}
+
+// Guarda lo que se corrigió en el texto antes de cambiar de página o cerrar
+function guardarEdicionTx() {
+  if (txPag) txPag.ocrHTML = txTexto.innerHTML;
+}
+
+async function mostrarPaginaTx(pag) {
+  guardarEdicionTx();
+  txPag = pag;
+  txSel = -1;
+  [...porId('txPestanas').children].forEach((b, i) =>
+    b.classList.toggle('activa', txListaRevision[i] === pag));
+
+  const ocr = await ocrCompleto(pag);
+  liberar(txImagen);
+  txImagen = await aCanvas(pag.recBlob);
+  const esc = txImagen.width / ocr.ancho; // de la lectura a la foto en color
+
+  // Lista de palabras con su recuadro en la foto
+  txPalabras = [];
+  ocr.lineas.forEach(linea => linea.forEach(w => txPalabras.push({
+    c: w.c, x0: w.b.x0 * esc, y0: w.b.y0 * esc, x1: w.b.x1 * esc, y1: w.b.y1 * esc
+  })));
+
+  // Texto: si ya se había corregido, se muestra lo corregido
+  if (pag.ocrHTML) {
+    txTexto.innerHTML = pag.ocrHTML;
+  } else if (ocr.lineas.length) {
+    let i = 0;
+    txTexto.innerHTML = ocr.lineas.map(linea => '<div>' + linea.map(w => {
+      const dudosa = w.c < UMBRAL_DUDOSA ? ' dudosa' : '';
+      return `<span class="pal${dudosa}" data-i="${i++}">${escaparHTML(w.t)}</span>`;
+    }).join(' ') + '</div>').join('');
+  } else {
+    txTexto.textContent = ocr.texto || '(No se encontró texto en esta página)';
+  }
+  txTexto.scrollTop = 0;
+
+  ajustarLienzoTx();
+  vistaAjustada();
+  dibujarTx();
+}
+
+// ----- Foto con zoom -----
+function ajustarLienzoTx() {
+  const r = txLienzo.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  txLienzo.width = Math.max(1, Math.round(r.width * dpr));
+  txLienzo.height = Math.max(1, Math.round(r.height * dpr));
+}
+function escalaBase() {
+  return Math.min(txLienzo.width / txImagen.width, txLienzo.height / txImagen.height);
+}
+function vistaAjustada() {
+  if (!txImagen) return;
+  const s = escalaBase();
+  txVista = { zoom: 1, ox: (txLienzo.width - txImagen.width * s) / 2, oy: (txLienzo.height - txImagen.height * s) / 2 };
+}
+function dibujarTx() {
+  const ctx = txLienzo.getContext('2d');
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0, 0, txLienzo.width, txLienzo.height);
+  if (!txImagen) return;
+  const s = escalaBase() * txVista.zoom;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.drawImage(txImagen, txVista.ox, txVista.oy, txImagen.width * s, txImagen.height * s);
+  txPalabras.forEach((w, i) => {
+    const x = txVista.ox + w.x0 * s, y = txVista.oy + w.y0 * s;
+    const ancho = (w.x1 - w.x0) * s, alto = (w.y1 - w.y0) * s;
+    if (w.c < UMBRAL_DUDOSA) {
+      ctx.fillStyle = 'rgba(255, 235, 59, 0.45)';
+      ctx.fillRect(x, y, ancho, alto);
+    }
+    if (i === txSel) {
+      ctx.strokeStyle = '#d93025';
+      ctx.lineWidth = 3 * dpr;
+      ctx.strokeRect(x - 3, y - 3, ancho + 6, alto + 6);
+    }
+  });
+}
+function zoomEn(factor, px, py) {
+  const nuevo = Math.min(8, Math.max(1, txVista.zoom * factor));
+  const f = nuevo / txVista.zoom;
+  txVista.ox = px - (px - txVista.ox) * f;
+  txVista.oy = py - (py - txVista.oy) * f;
+  txVista.zoom = nuevo;
+  if (nuevo === 1) vistaAjustada();
+  dibujarTx();
+}
+porId('txMas').onclick = () => zoomEn(1.5, txLienzo.width / 2, txLienzo.height / 2);
+porId('txMenos').onclick = () => zoomEn(1 / 1.5, txLienzo.width / 2, txLienzo.height / 2);
+porId('txAjustar').onclick = () => { vistaAjustada(); dibujarTx(); };
+
+// Mover con un dedo, acercar con dos (pellizco)
+const punteros = new Map();
+let distPellizco = 0;
+txLienzo.onpointerdown = e => {
+  txLienzo.setPointerCapture(e.pointerId);
+  punteros.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (punteros.size === 2) {
+    const [a, b] = [...punteros.values()];
+    distPellizco = Math.hypot(a.x - b.x, a.y - b.y);
+  }
+};
+txLienzo.onpointermove = e => {
+  if (!punteros.has(e.pointerId) || !txImagen) return;
+  const dpr = window.devicePixelRatio || 1;
+  const antes = punteros.get(e.pointerId);
+  const ahora = { x: e.clientX, y: e.clientY };
+  punteros.set(e.pointerId, ahora);
+  if (punteros.size === 1) {
+    txVista.ox += (ahora.x - antes.x) * dpr;
+    txVista.oy += (ahora.y - antes.y) * dpr;
+    dibujarTx();
+  } else if (punteros.size === 2 && distPellizco) {
+    const [a, b] = [...punteros.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    const r = txLienzo.getBoundingClientRect();
+    zoomEn(d / distPellizco, ((a.x + b.x) / 2 - r.left) * dpr, ((a.y + b.y) / 2 - r.top) * dpr);
+    distPellizco = d;
+  }
+};
+txLienzo.onpointerup = txLienzo.onpointercancel = e => {
+  punteros.delete(e.pointerId);
+  if (punteros.size < 2) distPellizco = 0;
+};
+
+// Tocar una palabra: la foto se acerca a ella y la marca en rojo
+txTexto.addEventListener('click', e => {
+  const span = e.target.closest('.pal');
+  if (!span) return;
+  const i = Number(span.dataset.i);
+  const w = txPalabras[i];
+  if (!w || !txImagen) return;
+  txTexto.querySelectorAll('.activa').forEach(s => s.classList.remove('activa'));
+  span.classList.add('activa');
+  txSel = i;
+  txVista.zoom = Math.max(txVista.zoom, 2.5);
+  const s = escalaBase() * txVista.zoom;
+  txVista.ox = txLienzo.width / 2 - ((w.x0 + w.x1) / 2) * s;
+  txVista.oy = txLienzo.height / 2 - ((w.y0 + w.y1) / 2) * s;
+  dibujarTx();
+});
+
+// Barrita del medio: más espacio para la foto o para el texto
+const txDivisor = porId('txDivisor');
+let moviendoDivisor = false;
+txDivisor.onpointerdown = e => { moviendoDivisor = true; txDivisor.setPointerCapture(e.pointerId); };
+txDivisor.onpointermove = e => {
+  if (!moviendoDivisor) return;
+  const panel = porId('txPanel');
+  const r = panel.getBoundingClientRect();
+  const enFila = getComputedStyle(panel).flexDirection === 'row';
+  const fraccion = enFila ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+  porId('txImagenPanel').style.flexBasis = `${Math.min(80, Math.max(20, fraccion * 100))}%`;
+};
+txDivisor.onpointerup = txDivisor.onpointercancel = () => {
+  if (!moviendoDivisor) return;
+  moviendoDivisor = false;
+  ajustarLienzoTx();
+  vistaAjustada();
+  dibujarTx();
+};
+window.addEventListener('resize', () => {
+  if (!txDlg.classList.contains('visible') || !txImagen) return;
+  ajustarLienzoTx();
+  vistaAjustada();
+  dibujarTx();
+});
+
+// ----- Copiar, Word y compartir -----
+// Texto plano de una página (con las correcciones, si las hay)
+function textoDePagina(pag) {
+  if (pag === txPag) return txTexto.innerText;
+  if (pag.ocrHTML) {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:-9999px;top:0;';
+    d.innerHTML = pag.ocrHTML;
+    document.body.appendChild(d);
+    const t = d.innerText;
+    d.remove();
+    return t;
+  }
+  const r = pag.ocrResultado;
+  if (!r) return '';
+  return r.lineas.length ? r.lineas.map(l => l.map(w => w.t).join(' ')).join('\n') : r.texto;
+}
+
+function textoTodo() {
+  if (txListaRevision.length === 1) return textoDePagina(txListaRevision[0]).trim();
+  return txListaRevision
+    .map(p => `── Página ${paginas.indexOf(p) + 1} ──\n${textoDePagina(p).trim()}`)
+    .join('\n\n');
+}
+
+porId('txCopiar').onclick = async () => {
+  const boton = porId('txCopiar');
+  try {
+    await navigator.clipboard.writeText(textoTodo());
+    boton.textContent = '✅ Copiado';
+  } catch {
+    boton.textContent = '❌ No se pudo';
+  }
+  setTimeout(() => { boton.textContent = '📋 Copiar'; }, 2000);
+};
+
+// Arma un documento de Word (.docx) con el texto de las páginas leídas
+function escaparXML(texto) {
+  return String(texto)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '') // caracteres que Word no acepta
+    .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function parrafoWord(texto, { negrita = false, tamano = 0, color = '' } = {}) {
+  const estilo = (negrita ? '<w:b/>' : '') + (color ? `<w:color w:val="${color}"/>` : '') +
+                 (tamano ? `<w:sz w:val="${tamano}"/>` : '');
+  return `<w:p><w:r>${estilo ? `<w:rPr>${estilo}</w:rPr>` : ''}` +
+         `<w:t xml:space="preserve">${escaparXML(texto)}</w:t></w:r></w:p>`;
+}
+async function crearWord() {
+  const saltoPagina = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const hoy = new Date().toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' });
+  let cuerpo = parrafoWord('Texto escaneado', { negrita: true, tamano: 36, color: '1A3D6D' }) +
+               parrafoWord(hoy, { color: '777777' }) + parrafoWord('');
+  txListaRevision.forEach((pag, i) => {
+    if (i > 0) cuerpo += saltoPagina;
+    if (txListaRevision.length > 1) {
+      cuerpo += parrafoWord(`Página ${paginas.indexOf(pag) + 1}`, { negrita: true, tamano: 28, color: '5E35B1' });
+    }
+    textoDePagina(pag).split('\n').forEach(linea => { cuerpo += parrafoWord(linea); });
+  });
+
+  const documento = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    cuerpo +
+    '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>' +
+    '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>' +
+    '</w:body></w:document>';
+  const tipos = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+    '</Types>';
+  const relaciones = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+    '</Relationships>';
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', tipos);
+  zip.file('_rels/.rels', relaciones);
+  zip.file('word/document.xml', documento);
+  return zip.generateAsync({ type: 'blob', mimeType: TIPO_WORD });
+}
+
+porId('txWord').onclick = async () => {
+  const boton = porId('txWord');
+  if (typeof JSZip === 'undefined') {
+    alert('❌ Falta la librería de Word (libs/jszip.min.js).');
+    return;
+  }
+  boton.textContent = '⏳ Creando...';
+  try {
+    const blob = await crearWord();
+    const nombre = `Texto escaneado ${fechaHora()}.docx`;
+    const archivo = new File([blob], nombre, { type: TIPO_WORD });
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      await navigator.share({ files: [archivo], title: nombre });
+    } else {
+      descargar(blob, nombre); // muchos Android no dejan compartir Word: se guarda en Descargas
+      alert('📝 El documento de Word se guardó en Descargas.');
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error(err);
+      alert('❌ No se pudo crear el documento de Word.');
+    }
+  } finally {
+    boton.textContent = '📝 Word';
+  }
+};
+
+porId('txCompartir').onclick = async () => {
+  const texto = textoTodo();
+  const archivo = new File([texto], `Texto escaneado ${fechaHora()}.txt`, { type: 'text/plain' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      await navigator.share({ files: [archivo], title: 'Texto escaneado' });
+    } else if (navigator.share) {
+      await navigator.share({ title: 'Texto escaneado', text: texto });
+    } else {
+      await navigator.clipboard.writeText(texto);
+      alert('📋 Texto copiado. Pégalo donde lo necesites.');
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error(err);
+      alert('❌ No se pudo compartir. Usa "Copiar".');
+    }
+  }
+};
+
+porId('txOtras').onclick = () => {
+  guardarEdicionTx();
+  dibujarMiniaturasTx();
+  mostrarPaso('Elegir');
+};
+
+function cerrarTexto() {
+  txDetenerPedido = true;
+  guardarEdicionTx();
+  txDlg.classList.remove('visible');
+  liberar(txImagen);
+  txImagen = null;
+  txPag = null;
+  txPalabras = [];
+}
+porId('txCerrar').onclick = cerrarTexto;
