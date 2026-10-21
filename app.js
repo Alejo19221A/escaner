@@ -1,4 +1,4 @@
-const VERSION = '1.7.2';
+const VERSION = '1.8';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -24,7 +24,7 @@ window.addEventListener('error', e => anotarError(e.message));
 window.addEventListener('unhandledrejection', e =>
   anotarError(e.reason && e.reason.message ? e.reason.message : e.reason));
 
-// Cada página: { baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato,
+// Cada página: { id, baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato,
 //                lectura, datosDlg, ocrPromesa, ocrResultado, ocrListo, ocrHTML }
 // Se guardan comprimidas (Blob) para no llenar la memoria del celular
 const paginas = [];
@@ -32,6 +32,9 @@ let modo = 'color';
 let tipoDoc = localStorage.getItem('tipoDoc') || 'normal'; // 'normal' o 'paciente'
 const estado = document.getElementById('estado');
 document.getElementById('version').textContent = `Versión ${VERSION}`;
+let avisoInicio = ''; // mensaje de la recuperación, para que "Listo para escanear" no lo tape
+// Última vez que se usó la app ANTES de abrirla ahora (para la regla de los 10 minutos)
+const actividadAnterior = Number(localStorage.getItem('ultimaActividad')) || 0;
 
 // ---------- 1. Esperar a que OpenCV cargue (sin bloquear la app) ----------
 let opencvListo = false;
@@ -41,7 +44,7 @@ function revisarOpenCV() {
   const c = window.cv;
   if (c && c.Mat) {
     opencvListo = true;
-    estado.textContent = '✅ Listo para escanear';
+    estado.textContent = avisoInicio || '✅ Listo para escanear';
     return;
   }
   if (c && !c._esperando && typeof c.then === 'function') {
@@ -125,6 +128,106 @@ function olvidarLectura(pag) {
   pag.ocrHTML = null;
 }
 
+// ---------- 1b. Respaldo en el celular (IndexedDB) ----------
+// Guarda el trabajo DENTRO del navegador del celular (nada sale a internet).
+// Si Android cierra Chrome por falta de memoria, al volver se recupera todo.
+let respaldoActivo = true;      // se apaga cuando el PDF ya se guardó o se compartió
+let colaBD = Promise.resolve(); // las operaciones de guardado van en fila, en orden
+let bdAbierta = null;
+let contadorId = 0;
+let avisoEspacio = false;
+const nuevoId = () => `${Date.now()}-${++contadorId}`;
+
+function abrirBD() {
+  if (!bdAbierta) {
+    bdAbierta = new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error('Este navegador no permite guardar el trabajo')); return; }
+      const pedido = indexedDB.open('escanerTrabajo', 1);
+      pedido.onupgradeneeded = () => {
+        const bd = pedido.result;
+        if (!bd.objectStoreNames.contains('paginas')) bd.createObjectStore('paginas', { keyPath: 'id' });
+        if (!bd.objectStoreNames.contains('sesion')) bd.createObjectStore('sesion');
+      };
+      pedido.onsuccess = () => resolve(pedido.result);
+      pedido.onerror = () => reject(pedido.error);
+    });
+    bdAbierta.catch(() => { bdAbierta = null; }); // si falla, se reintenta la próxima vez
+  }
+  return bdAbierta;
+}
+
+// Hace una operación en el almacenamiento, después de que terminen las anteriores
+function enBD(almacenes, accion) {
+  const tarea = colaBD.then(() => abrirBD()).then(bd => new Promise((resolve, reject) => {
+    const tx = bd.transaction(almacenes, 'readwrite');
+    const pedido = accion(tx);
+    tx.oncomplete = () => resolve(pedido ? pedido.result : undefined);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('Se canceló el guardado'));
+  }));
+  colaBD = tarea.catch(() => {});
+  return tarea;
+}
+
+function errorRespaldo(err) {
+  console.error(err);
+  if (err && err.name === 'QuotaExceededError' && !avisoEspacio) {
+    avisoEspacio = true;
+    estado.textContent = '⚠️ El celular tiene poco espacio: si sales de la app, el trabajo podría perderse';
+  }
+}
+
+// Guarda las imágenes y la lectura de una página
+function respaldarPagina(pag) {
+  if (!respaldoActivo || !pag || !paginas.includes(pag)) return;
+  const registro = {
+    id: pag.id,
+    baseBlob: pag.baseBlob,
+    esquinas: pag.esquinas,
+    giro: pag.giro || 0,
+    recBlob: pag.recBlob,
+    finalBlob: pag.finalBlob,
+    ancho: pag.ancho,
+    alto: pag.alto,
+    formato: pag.formato,
+    ocrResultado: pag.ocrListo ? pag.ocrResultado : null
+  };
+  enBD('paginas', tx => tx.objectStore('paginas').put(registro)).catch(errorRespaldo);
+}
+
+// Guarda el orden, el filtro, el texto corregido y si se estaba revisando el texto
+function respaldarSesion() {
+  if (!respaldoActivo) return;
+  const revisando = txDlg.classList.contains('visible') &&
+    porId('txRevisar').classList.contains('activo') && txPag && txListaRevision.length > 0;
+  const textos = {};
+  paginas.forEach(p => { if (p.ocrHTML) textos[p.id] = p.ocrHTML; });
+  const sesion = {
+    orden: paginas.map(p => p.id),
+    modo,
+    textos,
+    revision: revisando ? { ids: txListaRevision.map(p => p.id), actual: txPag.id } : null
+  };
+  enBD('sesion', tx => tx.objectStore('sesion').put(sesion, 'actual')).catch(errorRespaldo);
+}
+
+function respaldarTodo() {
+  paginas.forEach(respaldarPagina);
+  respaldarSesion();
+}
+
+function quitarPaginaRespaldo(id) {
+  enBD('paginas', tx => tx.objectStore('paginas').delete(id)).catch(err => console.error(err));
+}
+
+// Borra TODO lo guardado en el celular
+function borrarRespaldo() {
+  return enBD(['paginas', 'sesion'], tx => {
+    tx.objectStore('paginas').clear();
+    tx.objectStore('sesion').clear();
+  }).catch(err => console.error(err));
+}
+
 // ---------- 2. Tipo de documento: normal o paciente ----------
 function marcarTipo() {
   document.querySelectorAll('.tipo').forEach(b =>
@@ -203,9 +306,17 @@ async function manejarFoto(archivo) {
 }
 
 async function agregarPagina(base, esquinas) {
-  const pagina = { baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
+  const pagina = { id: nuevoId(), baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
   await procesarPagina(pagina, base);
   paginas.push(pagina);
+  if (respaldoActivo) {
+    respaldarPagina(pagina);
+    respaldarSesion();
+  } else {
+    // Después de guardar un PDF el respaldo estaba apagado: al seguir trabajando se vuelve a activar
+    respaldoActivo = true;
+    respaldarTodo();
+  }
   estado.textContent = esquinas
     ? `✅ Página ${paginas.length} lista (${pagina.formato})`
     : `📄 Página ${paginas.length} lista (sin recorte)`;
@@ -996,11 +1107,16 @@ function blancoNegro(canvas) {
   [src, gris, fondo, dif, k].forEach(m => m.delete());
 }
 
+// Marca en pantalla el filtro elegido
+function marcarModo() {
+  document.querySelectorAll('.modo').forEach(b =>
+    b.classList.toggle('activo', b.dataset.modo === modo));
+}
+
 document.querySelectorAll('.modo').forEach(boton => {
   boton.addEventListener('click', async () => {
-    document.querySelectorAll('.modo').forEach(b => b.classList.remove('activo'));
-    boton.classList.add('activo');
     modo = boton.dataset.modo;
+    marcarModo();
     if (!paginas.length) return;
     await mostrarCargando(true);
     try {
@@ -1010,6 +1126,7 @@ document.querySelectorAll('.modo').forEach(boton => {
         liberar(rec);
       }
       mostrarPaginas();
+      respaldarTodo();
     } finally {
       mostrarCargando(false);
     }
@@ -1047,6 +1164,7 @@ function moverPagina(i, direccion) {
   if (j < 0 || j >= paginas.length) return;
   [paginas[i], paginas[j]] = [paginas[j], paginas[i]];
   mostrarPaginas();
+  respaldarSesion();
 }
 
 // Gira la página 90° (sentido del reloj); el giro se guarda para cuando se reajuste el recorte
@@ -1063,6 +1181,8 @@ async function rotarPagina(i) {
     await aplicarModo(pag, girada);
     liberar(girada);
     mostrarPaginas();
+    respaldarPagina(pag);
+    respaldarSesion();
     if (tipoDoc === 'paciente' && paginas[0] === pag) leerPagina(pag); // volver a leer, ya derecha
   } catch (err) {
     console.error(err);
@@ -1086,6 +1206,8 @@ async function editarPagina(i) {
       pag.esquinas = esquinas;
       await procesarPagina(pag, base); // mantiene el giro que tenía
       mostrarPaginas();
+      respaldarPagina(pag);
+      respaldarSesion();
     }
   } finally {
     liberar(base);
@@ -1094,15 +1216,20 @@ async function editarPagina(i) {
 }
 
 function borrarPagina(i) {
+  const id = paginas[i].id;
   URL.revokeObjectURL(paginas[i].finalURL);
   paginas.splice(i, 1);
   mostrarPaginas();
+  quitarPaginaRespaldo(id);
+  respaldarSesion();
 }
 
 function empezarDeNuevo() {
   paginas.forEach(p => URL.revokeObjectURL(p.finalURL));
   paginas.length = 0;
   mostrarPaginas();
+  respaldoActivo = true;
+  borrarRespaldo(); // también se borra la copia guardada en el celular
   estado.textContent = '✅ Listo para escanear';
 }
 
@@ -1184,6 +1311,7 @@ function ocrCompleto(pag) {
       const resultado = { texto: data.text || '', lineas: lineasDe(data), ancho };
       pag.ocrResultado = resultado;
       pag.ocrListo = true;
+      respaldarPagina(pag); // la lectura también se guarda, para no repetirla
       console.log('Texto leído:', resultado.texto);
       return resultado;
     })().catch(err => {
@@ -1560,6 +1688,9 @@ function descargar(blob, nombre) {
 
 function terminar(mensaje) {
   cerrarDialogo();
+  // El documento ya salió: se borra la copia guardada en el celular
+  respaldoActivo = false;
+  borrarRespaldo();
   estado.textContent = mensaje;
   setTimeout(() => {
     if (confirm('Documento listo ✅\n¿Empezar un documento nuevo?')) empezarDeNuevo();
@@ -1624,8 +1755,16 @@ dlgCompartir.addEventListener('click', async () => {
 
 // ---------- 13. Borrado automático por inactividad (protege los datos) ----------
 let ultimaActividad = Date.now();
-['pointerdown', 'keydown', 'change'].forEach(evento =>
-  document.addEventListener(evento, () => { ultimaActividad = Date.now(); }, true));
+let ultimaAnotada = 0;
+['pointerdown', 'keydown', 'change', 'input'].forEach(evento =>
+  document.addEventListener(evento, () => {
+    ultimaActividad = Date.now();
+    // Se anota en el celular (como mucho cada 5 s) para la regla de los 10 minutos al volver
+    if (ultimaActividad - ultimaAnotada > 5000) {
+      ultimaAnotada = ultimaActividad;
+      localStorage.setItem('ultimaActividad', String(ultimaActividad));
+    }
+  }, true));
 
 function revisarInactividad() {
   if (!paginas.length) return;
@@ -1637,7 +1776,17 @@ function revisarInactividad() {
   estado.textContent = '🔒 Las páginas se borraron por inactividad (protección de datos)';
 }
 setInterval(revisarInactividad, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarInactividad(); });
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Se sale de la app: guardar lo último antes de que Android pueda cerrar Chrome
+    localStorage.setItem('ultimaActividad', String(ultimaActividad));
+    if (txDlg.classList.contains('visible')) guardarEdicionTx();
+    respaldarSesion();
+  } else {
+    revisarInactividad();
+  }
+});
 
 // ---------- 14. Reportar problema (sin datos de pacientes) ----------
 // Celular y navegador en pocas palabras: "Android 14 · Chrome 130", "iPhone · Safari"
@@ -1739,6 +1888,7 @@ let txPalabras = [];           // palabras con su recuadro en la foto
 let txSel = -1;                // palabra tocada
 let txSeguirPalabra = false;   // la foto sigue a la palabra tocada (aunque salga o se esconda el teclado)
 let txVista = { zoom: 1, ox: 0, oy: 0 };
+let txTemporizador = null;     // espera un momento después de escribir para guardar
 const esAndroid = /Android/i.test(navigator.userAgent);
 
 function mostrarPaso(paso) {
@@ -1847,8 +1997,18 @@ function dibujarPestanas(lista) {
 
 // Guarda lo que se corrigió en el texto antes de cambiar de página o cerrar
 function guardarEdicionTx() {
+  clearTimeout(txTemporizador); // evita que un guardado pendiente se cruce con otra página
   if (txPag) txPag.ocrHTML = txTexto.innerHTML;
 }
+
+// Mientras escribes: un momento después de la última tecla, se guarda la corrección en el celular
+txTexto.addEventListener('input', () => {
+  clearTimeout(txTemporizador);
+  txTemporizador = setTimeout(() => {
+    guardarEdicionTx();
+    respaldarSesion();
+  }, 800);
+});
 
 async function mostrarPaginaTx(pag) {
   guardarEdicionTx();
@@ -1886,6 +2046,7 @@ async function mostrarPaginaTx(pag) {
   ajustarLienzoTx();
   vistaAjustada();
   dibujarTx();
+  respaldarSesion(); // recuerda qué página se estaba revisando
 }
 
 // ----- Foto con zoom -----
@@ -2122,53 +2283,155 @@ porId('txCopiar').onclick = async () => {
   setTimeout(() => { boton.textContent = '📋 Copiar'; }, 2000);
 };
 
-// Arma un documento de Word (.docx) con el texto de las páginas leídas
+// ----- Documento de Word (.docx) completo -----
+// Un .docx es un .zip con varias piezas. Van todas las que Word espera:
+// tipos de contenido, relaciones, documento, estilos, configuración, fuentes y datos del documento.
+const XML_INICIO = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+const NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
 function escaparXML(texto) {
   return String(texto)
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '') // caracteres que Word no acepta
+    .replace(/[\u0000-\u0008\u000B\u000C\u000D\u000E-\u001F]/g, '') // caracteres que Word no acepta
     .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
-function parrafoWord(texto, { negrita = false, tamano = 0, color = '' } = {}) {
-  const estilo = (negrita ? '<w:b/>' : '') + (color ? `<w:color w:val="${color}"/>` : '') +
-                 (tamano ? `<w:sz w:val="${tamano}"/>` : '');
-  return `<w:p><w:r>${estilo ? `<w:rPr>${estilo}</w:rPr>` : ''}` +
-         `<w:t xml:space="preserve">${escaparXML(texto)}</w:t></w:r></w:p>`;
-}
-async function crearWord() {
-  const saltoPagina = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
-  const hoy = new Date().toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' });
-  let cuerpo = parrafoWord('Texto escaneado', { negrita: true, tamano: 36, color: '1A3D6D' }) +
-               parrafoWord(hoy, { color: '777777' }) + parrafoWord('');
-  txListaRevision.forEach((pag, i) => {
-    if (i > 0) cuerpo += saltoPagina;
-    if (txListaRevision.length > 1) {
-      cuerpo += parrafoWord(`Página ${paginas.indexOf(pag) + 1}`, { negrita: true, tamano: 28, color: '5E35B1' });
-    }
-    textoDePagina(pag).split('\n').forEach(linea => { cuerpo += parrafoWord(linea); });
-  });
 
-  const documento = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-    cuerpo +
-    '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>' +
-    '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>' +
-    '</w:body></w:document>';
-  const tipos = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+// Un párrafo con un estilo (Title, Subtitle, Heading1 o normal); puede empezar en hoja nueva
+function parrafoWord(texto, estilo = '', hojaNueva = false) {
+  const props = (estilo ? `<w:pStyle w:val="${estilo}"/>` : '') + (hojaNueva ? '<w:pageBreakBefore/>' : '');
+  const pPr = props ? `<w:pPr>${props}</w:pPr>` : '';
+  if (!texto) return `<w:p>${pPr}</w:p>`;
+  return `<w:p>${pPr}<w:r><w:t xml:space="preserve">${escaparXML(texto)}</w:t></w:r></w:p>`;
+}
+
+function piezasWord(cuerpo) {
+  const ahora = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+  const tipos = XML_INICIO +
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
     '<Default Extension="xml" ContentType="application/xml"/>' +
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+    '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>' +
+    '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>' +
+    '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' +
+    '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
+    '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>' +
     '</Types>';
-  const relaciones = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+
+  const relacionesPaquete = XML_INICIO +
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>' +
+    '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>' +
     '</Relationships>';
 
+  const relacionesDocumento = XML_INICIO +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>' +
+    '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>' +
+    '</Relationships>';
+
+  // Hoja Carta con márgenes de 2,54 cm
+  const documento = XML_INICIO +
+    `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_REL}"><w:body>` +
+    cuerpo +
+    '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>' +
+    '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>' +
+    '<w:cols w:space="708"/></w:sectPr>' +
+    '</w:body></w:document>';
+
+  // Letra Calibri 11, español de Colombia, y estilos de título, subtítulo y encabezado
+  const estilos = XML_INICIO +
+    `<w:styles xmlns:w="${NS_W}">` +
+    '<w:docDefaults>' +
+    '<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/>' +
+    '<w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="es-CO" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>' +
+    '<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>' +
+    '</w:docDefaults>' +
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+    '<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/>' +
+    '<w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>' +
+    '<w:next w:val="Normal"/><w:uiPriority w:val="10"/><w:qFormat/>' +
+    '<w:pPr><w:spacing w:after="60"/></w:pPr>' +
+    '<w:rPr><w:b/><w:color w:val="1A3D6D"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/>' +
+    '<w:next w:val="Normal"/><w:uiPriority w:val="11"/><w:qFormat/>' +
+    '<w:pPr><w:spacing w:after="240"/></w:pPr>' +
+    '<w:rPr><w:color w:val="777777"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>' +
+    '<w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/>' +
+    '<w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr>' +
+    '<w:rPr><w:b/><w:color w:val="5E35B1"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>' +
+    '</w:styles>';
+
+  const configuracion = XML_INICIO +
+    `<w:settings xmlns:w="${NS_W}">` +
+    '<w:zoom w:percent="100"/><w:defaultTabStop w:val="708"/>' +
+    '<w:characterSpacingControl w:val="doNotCompress"/>' +
+    '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>' +
+    '</w:settings>';
+
+  const fuentes = XML_INICIO +
+    `<w:fonts xmlns:w="${NS_W}">` +
+    '<w:font w:name="Calibri"><w:panose1 w:val="020F0502020204030204"/><w:charset w:val="00"/>' +
+    '<w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>' +
+    '</w:fonts>';
+
+  // Datos del documento: sin nombres ni cédulas de pacientes
+  const datosBasicos = XML_INICIO +
+    '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
+    'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" ' +
+    'xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+    '<dc:title>Texto escaneado</dc:title><dc:creator>Escáner</dc:creator>' +
+    '<cp:lastModifiedBy>Escáner</cp:lastModifiedBy><cp:revision>1</cp:revision>' +
+    `<dcterms:created xsi:type="dcterms:W3CDTF">${ahora}</dcterms:created>` +
+    `<dcterms:modified xsi:type="dcterms:W3CDTF">${ahora}</dcterms:modified>` +
+    '</cp:coreProperties>';
+
+  const datosApp = XML_INICIO +
+    '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" ' +
+    'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">' +
+    '<Application>Escaner Colombiana de Trasplantes</Application><DocSecurity>0</DocSecurity>' +
+    '<ScaleCrop>false</ScaleCrop><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc>' +
+    '<HyperlinksChanged>false</HyperlinksChanged><AppVersion>16.0000</AppVersion>' +
+    '</Properties>';
+
+  return {
+    '[Content_Types].xml': tipos,
+    '_rels/.rels': relacionesPaquete,
+    'docProps/core.xml': datosBasicos,
+    'docProps/app.xml': datosApp,
+    'word/document.xml': documento,
+    'word/_rels/document.xml.rels': relacionesDocumento,
+    'word/styles.xml': estilos,
+    'word/settings.xml': configuracion,
+    'word/fontTable.xml': fuentes
+  };
+}
+
+async function crearWord() {
+  const hoy = new Date().toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' });
+  const varias = txListaRevision.length > 1;
+  let cuerpo = parrafoWord('Texto escaneado', 'Title') + parrafoWord(hoy, 'Subtitle');
+  txListaRevision.forEach((pag, i) => {
+    // Con varias páginas, cada una empieza en hoja nueva con su encabezado
+    if (varias) cuerpo += parrafoWord(`Página ${paginas.indexOf(pag) + 1}`, 'Heading1', i > 0);
+    textoDePagina(pag).split(/\r?\n/).forEach(linea => { cuerpo += parrafoWord(linea); });
+  });
+
   const zip = new JSZip();
-  zip.file('[Content_Types].xml', tipos);
-  zip.file('_rels/.rels', relaciones);
-  zip.file('word/document.xml', documento);
-  return zip.generateAsync({ type: 'blob', mimeType: TIPO_WORD });
+  const piezas = piezasWord(cuerpo);
+  // [Content_Types].xml va primero, como lo hace Word
+  Object.keys(piezas).forEach(ruta => zip.file(ruta, piezas[ruta]));
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: TIPO_WORD,
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 }
+  });
 }
 
 // Word: en Android se guarda directo en Descargas (Chrome no deja compartir Word);
@@ -2192,7 +2455,13 @@ porId('txWord').onclick = async () => {
   }
   const guardarEnDescargas = () => {
     descargar(blob, nombre);
-    alert('📥 El Word quedó guardado en Descargas.\nÁbrelo desde la app Archivos.');
+    alert(esAndroid
+      ? '📥 El Word quedó guardado en Descargas.\n\n' +
+        'Para enviarlo:\n' +
+        '• WhatsApp: abre el chat → 📎 → Documento → elige el archivo.\n' +
+        '• Teams: abre el chat → 📎 → Archivo → elige el archivo.\n' +
+        '• O en la app Archivos → Descargas: deja presionado el archivo → Compartir.'
+      : '📥 El Word quedó guardado en Descargas.');
   };
   try {
     const archivo = new File([blob], nombre, { type: TIPO_WORD });
@@ -2235,6 +2504,7 @@ porId('txOtras').onclick = () => {
   guardarEdicionTx();
   dibujarMiniaturasTx();
   mostrarPaso('Elegir');
+  respaldarSesion();
 };
 
 function cerrarTexto() {
@@ -2247,5 +2517,102 @@ function cerrarTexto() {
   txPalabras = [];
   txSel = -1;
   txSeguirPalabra = false;
+  respaldarSesion();
 }
 porId('txCerrar').onclick = cerrarTexto;
+
+// ---------- 16. Recuperar el trabajo al volver a la app ----------
+async function recuperarTrabajo() {
+  let sesion, registros;
+  try {
+    sesion = await enBD('sesion', tx => tx.objectStore('sesion').get('actual'));
+    registros = await enBD('paginas', tx => tx.objectStore('paginas').getAll());
+  } catch (err) {
+    console.error(err); // sin almacenamiento la app funciona igual, solo que sin respaldo
+    return;
+  }
+
+  const orden = (sesion && sesion.orden) || [];
+  if (!orden.length) {
+    if (registros.length) borrarRespaldo(); // restos sueltos de una vez anterior
+    return;
+  }
+
+  // Regla de los 10 minutos: si pasó más tiempo sin uso, se borra todo
+  if (Date.now() - actividadAnterior >= MINUTOS_INACTIVIDAD * 60000) {
+    await borrarRespaldo();
+    avisoInicio = '🔒 Las páginas se borraron por inactividad (protección de datos)';
+    estado.textContent = avisoInicio;
+    return;
+  }
+
+  await mostrarCargando(true);
+  let revisionPendiente = null;
+  try {
+    const porIdReg = new Map(registros.map(r => [r.id, r]));
+    const textos = sesion.textos || {};
+    for (const id of orden) {
+      const r = porIdReg.get(id);
+      if (!r || !r.baseBlob || !r.recBlob || !r.finalBlob) continue;
+      const pag = {
+        id: r.id,
+        baseBlob: r.baseBlob,
+        esquinas: r.esquinas,
+        giro: r.giro || 0,
+        recBlob: r.recBlob,
+        finalBlob: r.finalBlob,
+        finalURL: URL.createObjectURL(r.finalBlob),
+        ancho: r.ancho,
+        alto: r.alto,
+        formato: r.formato,
+        lectura: null,
+        ocrPromesa: null,
+        ocrResultado: null,
+        ocrListo: false,
+        ocrHTML: textos[r.id] || null
+      };
+      if (r.ocrResultado) { // ya estaba leída: no se vuelve a leer
+        pag.ocrResultado = r.ocrResultado;
+        pag.ocrListo = true;
+        pag.ocrPromesa = Promise.resolve(r.ocrResultado);
+      }
+      paginas.push(pag);
+    }
+
+    // Quitar páginas guardadas que ya no hacen parte del documento
+    registros.forEach(r => { if (!paginas.some(p => p.id === r.id)) quitarPaginaRespaldo(r.id); });
+    if (!paginas.length) { borrarRespaldo(); return; }
+
+    if (sesion.modo) { modo = sesion.modo; marcarModo(); }
+    mostrarPaginas();
+    respaldarSesion();
+    localStorage.setItem('ultimaActividad', String(Date.now()));
+    const n = paginas.length;
+    avisoInicio = `♻️ Se recuperó tu trabajo: ${n} ${n === 1 ? 'página' : 'páginas'}`;
+    estado.textContent = avisoInicio;
+    revisionPendiente = sesion.revision;
+  } catch (err) {
+    console.error(err);
+    estado.textContent = '⚠️ No se pudo recuperar el trabajo anterior';
+  } finally {
+    mostrarCargando(false);
+  }
+
+  // Si estaba revisando el texto, se vuelve a abrir en la misma página
+  if (revisionPendiente && revisionPendiente.ids) {
+    const lista = revisionPendiente.ids
+      .map(id => paginas.find(p => p.id === id))
+      .filter(p => p && p.ocrListo);
+    if (lista.length) {
+      const actual = lista.find(p => p.id === revisionPendiente.actual) || lista[0];
+      txSeleccion = new Set(lista.map(p => paginas.indexOf(p)));
+      txDlg.classList.add('visible');
+      mostrarPaso('Revisar');
+      dibujarPestanas(lista);
+      try { await mostrarPaginaTx(actual); } catch (err) { console.error(err); cerrarTexto(); }
+    }
+  }
+}
+
+// Se revisa al abrir la app (va en la fila: si tomas una foto de inmediato, espera a que termine)
+enCola(recuperarTrabajo);
