@@ -1,4 +1,4 @@
-const VERSION = '1.8';
+const VERSION = '1.8.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -6,6 +6,7 @@ const MAX_ARCHIVOS_COMPARTIR = 10;               // Chrome deja compartir máxim
 const MAX_BYTES_COMPARTIR = 45 * 1024 * 1024;    // y un tamaño total limitado (dejamos margen)
 const UMBRAL_DUDOSA = 70;      // confianza del lector (0-100) por debajo de la cual una palabra sale en amarillo
 const TIPO_WORD = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const MAX_CAPTURAS = 4;        // capturas de pantalla que se pueden adjuntar al reporte
 
 // ---------- 0. Registro de errores (para "Reportar problema") ----------
 // Solo guarda mensajes técnicos, nunca fotos, cédulas ni nombres
@@ -1829,36 +1830,76 @@ const repDlg = document.getElementById('reporteDlg');
 const repTexto = document.getElementById('repTexto');
 const repFoto = document.getElementById('repFoto');
 const repFotoNombre = document.getElementById('repFotoNombre');
+const repAdjuntar = document.getElementById('repAdjuntar');
+const repAdjuntarTexto = document.getElementById('repAdjuntarTexto');
+const repQuitar = document.getElementById('repQuitar');
+let repCapturas = []; // capturas elegidas (se suman, hasta MAX_CAPTURAS)
+
+// Muestra cuántas capturas hay, sus nombres y qué botones aplican
+function mostrarCapturas() {
+  const n = repCapturas.length;
+  repFotoNombre.innerHTML = n
+    ? `📎 ${n} de ${MAX_CAPTURAS} ${n === 1 ? 'captura' : 'capturas'}:<br>` +
+      repCapturas.map(f => `• ${escaparHTML(f.name)}`).join('<br>')
+    : '';
+  repAdjuntarTexto.textContent = n
+    ? '📎 Agregar otra captura'
+    : `📎 Adjuntar capturas de pantalla (hasta ${MAX_CAPTURAS}, opcional)`;
+  repAdjuntar.style.display = n >= MAX_CAPTURAS ? 'none' : 'block';
+  repQuitar.style.display = n ? 'block' : 'none';
+}
+
+function cerrarReporte() {
+  repDlg.classList.remove('visible');
+  repCapturas = [];
+}
 
 document.getElementById('reportar').addEventListener('click', (e) => {
   e.preventDefault();
   repTexto.value = '';
   repFoto.value = '';
-  repFotoNombre.textContent = '';
+  repCapturas = [];
+  mostrarCapturas();
   repDlg.classList.add('visible');
   repTexto.focus();
 });
 
+// Cada vez que se eligen capturas, se SUMAN a las que ya había (hasta el límite)
 repFoto.addEventListener('change', () => {
-  const foto = repFoto.files[0];
-  repFotoNombre.textContent = foto ? `📎 ${foto.name}` : '';
+  const nuevas = [...repFoto.files];
+  repFoto.value = '';
+  if (!nuevas.length) return;
+  const espacio = MAX_CAPTURAS - repCapturas.length;
+  if (nuevas.length > espacio) {
+    alert(`Solo se pueden adjuntar ${MAX_CAPTURAS} capturas. Se ${espacio === 1 ? 'agregó 1' : 'agregaron ' + espacio}.`);
+  }
+  repCapturas.push(...nuevas.slice(0, espacio));
+  mostrarCapturas();
 });
 
-document.getElementById('repCancelar').addEventListener('click', () => repDlg.classList.remove('visible'));
+repQuitar.addEventListener('click', (e) => {
+  e.preventDefault();
+  repCapturas = [];
+  mostrarCapturas();
+});
 
-// "Enviar" abre Compartir al instante (con el texto y la captura, si hay)
+document.getElementById('repCancelar').addEventListener('click', cerrarReporte);
+
+// "Enviar" abre Compartir al instante (con el texto y las capturas, si hay)
 document.getElementById('repEnviar').addEventListener('click', async () => {
   const texto = armarReporte(repTexto.value.trim());
-  const foto = repFoto.files[0];
+  const fotos = [...repCapturas];
   try {
-    if (foto && navigator.canShare && navigator.canShare({ files: [foto], text: texto })) {
-      await navigator.share({ title: 'Reporte Escáner', text: texto, files: [foto] });
-      repDlg.classList.remove('visible');
+    if (fotos.length && navigator.canShare && navigator.canShare({ files: fotos, text: texto })) {
+      await navigator.share({ title: 'Reporte Escáner', text: texto, files: fotos });
+      cerrarReporte();
       return;
     }
     if (navigator.share) {
+      // El celular no deja adjuntar las capturas: se envía solo el texto y se avisa
       await navigator.share({ title: 'Reporte Escáner', text: texto });
-      repDlg.classList.remove('visible');
+      cerrarReporte();
+      if (fotos.length) alert('⚠️ El celular no dejó adjuntar las capturas. Envíalas aparte en el mismo chat.');
       return;
     }
   } catch (err) {
@@ -1867,8 +1908,9 @@ document.getElementById('repEnviar').addEventListener('click', async () => {
   }
   try {
     await navigator.clipboard.writeText(texto);
-    alert('📋 No se pudo abrir Compartir. El reporte se copió: pégalo en Teams o WhatsApp.');
-    repDlg.classList.remove('visible');
+    alert('📋 No se pudo abrir Compartir. El reporte se copió: pégalo en Teams o WhatsApp' +
+      (fotos.length ? ' y envía las capturas aparte.' : '.'));
+    cerrarReporte();
   } catch {
     alert('❌ No se pudo enviar el reporte.');
   }

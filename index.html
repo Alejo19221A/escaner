@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=1.8">
+  <link rel="stylesheet" href="estilos.css?v=1.8.1">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
@@ -146,11 +146,12 @@
       <h2>🐞 Reportar problema</h2>
       <label for="repTexto">¿Qué pasó?</label>
       <textarea id="repTexto" rows="5" placeholder="Ejemplo: al tocar Compartir no pasó nada"></textarea>
-      <label class="botonSec">
-        📎 Adjuntar captura de pantalla (opcional)
-        <input type="file" accept="image/*" id="repFoto" hidden>
+      <label class="botonSec" id="repAdjuntar">
+        <span id="repAdjuntarTexto">📎 Adjuntar capturas de pantalla (hasta 4, opcional)</span>
+        <input type="file" accept="image/*" id="repFoto" multiple hidden>
       </label>
       <p id="repFotoNombre"></p>
+      <a href="#" class="botonSec" id="repQuitar" style="display:none">✕ Quitar capturas</a>
       <p class="aviso">⚠️ Adjunta solo capturas de la pantalla de la app.</p>
       <div class="filaDlg">
         <button id="repCancelar">Cancelar</button>
@@ -161,6 +162,6 @@
 
   <div id="cargando"><div>⏳ Procesando...</div></div>
 
-  <script src="app.js?v=1.8"></script>
+  <script src="app.js?v=1.8.1"></script>
 </body>
 </html>
