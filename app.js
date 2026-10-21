@@ -1,7 +1,9 @@
-const VERSION = '1.6';
+const VERSION = '1.6.2';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
+const MAX_ARCHIVOS_COMPARTIR = 10;               // Chrome deja compartir máximo 10 archivos a la vez
+const MAX_BYTES_COMPARTIR = 45 * 1024 * 1024;    // y un tamaño total limitado (dejamos margen)
 
 // ---------- 0. Registro de errores (para "Reportar problema") ----------
 // Solo guarda mensajes técnicos, nunca fotos, cédulas ni nombres
@@ -1142,8 +1144,12 @@ const dlgGuardar = document.getElementById('dlgGuardar');
 const dlgCompartir = document.getElementById('dlgCompartir');
 let forma = localStorage.getItem('formaPDF') || 'uno'; // 'uno' o 'varios' (recuerda la última)
 let datosUno = { titulo: '', cedula: '', nombre: '' };   // datos cuando es "Todo en un PDF"
-let pdfsListos = {};    // PDF ya armados, para guardar o compartir rápido
+let pdfsListos = {};    // PDF que se están armando (promesas)
+let pdfsHechos = {};    // PDF ya terminados, listos para guardar o compartir al instante
+let progresoPDF = '';   // texto de avance mientras se arman
+let sesionDlg = 0;      // evita mezclar PDF de una vez anterior que se abrió la ventana
 let turnoLectura = 0;   // evita mezclar lecturas si cambian de opción
+let loteActual = 0;     // qué tanda de archivos toca compartir (de a 10)
 
 // Quita los caracteres que Windows no permite en nombres de archivo
 function limpiarTitulo(texto) {
@@ -1186,6 +1192,31 @@ function nombresFinales() {
     if (usados[n] > 1) n += ` (${usados[n]})`;
     return `${n}.pdf`;
   });
+}
+
+// Divide los PDF en tandas que Chrome sí deje compartir (máx. 10 archivos y un tamaño total límite)
+function lotesDe(blobs) {
+  const lotes = [];
+  let actual = [], bytes = 0;
+  blobs.forEach((b, i) => {
+    if (actual.length && (actual.length >= MAX_ARCHIVOS_COMPARTIR || bytes + b.size > MAX_BYTES_COMPARTIR)) {
+      lotes.push(actual);
+      actual = [];
+      bytes = 0;
+    }
+    actual.push(i);
+    bytes += b.size;
+  });
+  if (actual.length) lotes.push(actual);
+  return lotes; // cada tanda es una lista de posiciones
+}
+
+const rango = lote => (lote.length > 1 ? `${lote[0] + 1}–${lote[lote.length - 1] + 1}` : `${lote[0] + 1}`);
+
+// Avisos importantes: se muestran abajo y en una ventana para que no pasen desapercibidos
+function avisar(mensaje) {
+  dlgArchivo.textContent = mensaje;
+  alert(mensaje);
 }
 
 // Crea una casilla (con su etiqueta) conectada a los datos
@@ -1268,10 +1299,26 @@ function actualizarDialogo() {
   const lista = archivos();
   const n = lista.length;
   const listo = lista.every(a => completo(a.datos));
-  dlgGuardar.disabled = !listo;
-  dlgCompartir.disabled = !listo;
-  dlgGuardar.textContent = n > 1 ? `💾 Guardar los ${n}` : '💾 Guardar';
-  dlgCompartir.textContent = n > 1 ? `📤 Compartir los ${n}` : '📤 Compartir';
+  const blobs = pdfsHechos[formaEfectiva()];
+  const pdfListo = !!blobs;
+
+  // Los botones solo se activan cuando los datos están completos Y los PDF ya están armados
+  dlgGuardar.disabled = !listo || !pdfListo;
+  dlgCompartir.disabled = !listo || !pdfListo;
+  if (!pdfListo) {
+    dlgGuardar.textContent = '⏳ Preparando...';
+    dlgCompartir.textContent = `⏳ ${progresoPDF || 'Preparando PDF...'}`;
+  } else {
+    dlgGuardar.textContent = n > 1 ? `💾 Guardar los ${n}` : '💾 Guardar';
+    const lotes = lotesDe(blobs);
+    if (lotes.length > 1) {
+      const lote = lotes[Math.min(loteActual, lotes.length - 1)];
+      dlgCompartir.textContent = `📤 Compartir ${rango(lote)} de ${n}`;
+    } else {
+      dlgCompartir.textContent = n > 1 ? `📤 Compartir los ${n}` : '📤 Compartir';
+    }
+  }
+
   if (!listo) {
     dlgArchivo.textContent = tipoDoc === 'normal'
       ? 'Escribe un nombre para cada archivo'
@@ -1281,18 +1328,30 @@ function actualizarDialogo() {
   }
 }
 
-// Arma los PDF de la opción elegida (una sola vez)
+// Arma los PDF de la opción elegida apenas se abre la ventana (una sola vez)
 function prepararPDFs() {
   const clave = formaEfectiva();
+  const sesion = sesionDlg;
   if (!pdfsListos[clave]) {
     const grupos = archivos().map(a => a.paginas);
     pdfsListos[clave] = (async () => {
       const blobs = [];
-      for (const g of grupos) blobs.push(await crearPDF(g));
+      for (let i = 0; i < grupos.length; i++) {
+        progresoPDF = grupos.length > 1 ? `Preparando PDF ${i + 1} de ${grupos.length}...` : 'Preparando PDF...';
+        if (sesion === sesionDlg && clave === formaEfectiva()) actualizarDialogo();
+        blobs.push(await crearPDF(grupos[i]));
+      }
       return blobs;
-    })().catch(err => {
+    })().then(blobs => {
+      if (sesion !== sesionDlg) return null; // la ventana ya se cerró
+      pdfsHechos[clave] = blobs;
+      progresoPDF = '';
+      actualizarDialogo();
+      return blobs;
+    }).catch(err => {
       console.error(err);
       delete pdfsListos[clave];
+      if (sesion === sesionDlg) avisar('❌ No se pudo preparar el PDF. Cierra la ventana e intenta otra vez.');
       return null;
     });
   }
@@ -1334,7 +1393,11 @@ function puedeCompartir() {
 
 // Abrir la ventana de guardar
 document.getElementById('pdf').addEventListener('click', () => {
+  sesionDlg++;
   pdfsListos = {};
+  pdfsHechos = {};
+  progresoPDF = '';
+  loteActual = 0;
   const hora = fechaHora();
   datosUno = { titulo: `Documento ${hora}`, cedula: '', nombre: '' };
   paginas.forEach((p, i) => { p.datosDlg = { titulo: `Documento ${hora} (${i + 1})`, cedula: '', nombre: '' }; });
@@ -1342,7 +1405,7 @@ document.getElementById('pdf').addEventListener('click', () => {
   dlgCompartir.style.display = puedeCompartir() ? 'block' : 'none';
   dlg.classList.add('visible');
   dibujarCampos();
-  prepararPDFs();
+  prepararPDFs(); // empieza a armar los PDF de una vez, mientras revisan los datos
   if (tipoDoc === 'paciente') {
     leerCedulas();
   } else if (archivos().length === 1) {
@@ -1356,6 +1419,7 @@ document.querySelectorAll('.forma').forEach(boton => {
   boton.addEventListener('click', () => {
     forma = boton.dataset.forma;
     localStorage.setItem('formaPDF', forma);
+    loteActual = 0;
     dibujarCampos();
     prepararPDFs();
     if (tipoDoc === 'paciente') leerCedulas();
@@ -1364,8 +1428,11 @@ document.querySelectorAll('.forma').forEach(boton => {
 
 function cerrarDialogo() {
   dlg.classList.remove('visible');
+  sesionDlg++;
   turnoLectura++;
   pdfsListos = {};
+  pdfsHechos = {};
+  loteActual = 0;
 }
 document.getElementById('dlgCancelar').addEventListener('click', cerrarDialogo);
 
@@ -1388,11 +1455,11 @@ function terminar(mensaje) {
 }
 
 dlgGuardar.addEventListener('click', async () => {
+  const blobs = pdfsHechos[formaEfectiva()];
+  if (!blobs) return;
   const nombres = nombresFinales();
   await mostrarCargando(true);
   try {
-    const blobs = await prepararPDFs();
-    if (!blobs) throw new Error('No se pudieron crear los PDF');
     for (let i = 0; i < blobs.length; i++) {
       descargar(blobs[i], nombres[i]);
       if (blobs.length > 1) await new Promise(r => setTimeout(r, 400)); // pausa entre descargas
@@ -1401,33 +1468,45 @@ dlgGuardar.addEventListener('click', async () => {
     terminar(nombres.length > 1 ? `✅ Se guardaron ${nombres.length} PDF` : `✅ Guardado: ${nombres[0]}`);
   } catch (err) {
     console.error(err);
-    dlgArchivo.textContent = '❌ Hubo un error creando el PDF.';
+    avisar('❌ Hubo un error guardando el PDF.');
   } finally {
     mostrarCargando(false);
   }
 });
 
 dlgCompartir.addEventListener('click', async () => {
+  // Los PDF ya están hechos: el menú de compartir se abre de inmediato
+  const blobs = pdfsHechos[formaEfectiva()];
+  if (!blobs) return;
   const nombres = nombresFinales();
+  const lotes = lotesDe(blobs);
+  const lote = lotes[Math.min(loteActual, lotes.length - 1)];
+  const pdfs = lote.map(i => new File([blobs[i]], nombres[i], { type: 'application/pdf' }));
+
+  if (navigator.canShare && !navigator.canShare({ files: pdfs })) {
+    avisar('❌ Este celular no deja compartir estos archivos. Usa "Guardar".');
+    return;
+  }
   try {
-    const blobs = await prepararPDFs();
-    if (!blobs) throw new Error('No se pudieron crear los PDF');
-    const pdfs = blobs.map((b, i) => new File([b], nombres[i], { type: 'application/pdf' }));
-    if (navigator.canShare && !navigator.canShare({ files: pdfs })) {
-      dlgArchivo.textContent = '❌ Este celular no deja compartir varios a la vez. Usa "Guardar".';
-      return;
-    }
     await navigator.share({
       files: pdfs,
-      title: pdfs.length > 1 ? `${pdfs.length} documentos` : nombres[0]
+      title: pdfs.length > 1 ? `${pdfs.length} documentos` : nombres[lote[0]]
     });
+    loteActual++;
+    if (loteActual < lotes.length) {
+      // Quedan más tandas: el botón ya muestra la siguiente
+      actualizarDialogo();
+      const siguiente = lotes[loteActual];
+      dlgArchivo.textContent = `✅ Enviados ${rango(lote)}. Toca "Compartir" para enviar ${rango(siguiente)}.`;
+      return;
+    }
     terminar(nombres.length > 1 ? `📤 Se compartieron ${nombres.length} PDF` : `📤 Compartido: ${nombres[0]}`);
   } catch (err) {
     if (err.name === 'AbortError') return; // cerró el menú de compartir
     console.error(err);
-    dlgArchivo.textContent = err.name === 'NotAllowedError'
-      ? '👆 Toca "Compartir" otra vez, por favor'
-      : '❌ No se pudo compartir. Usa "Guardar".';
+    avisar(err.name === 'NotAllowedError'
+      ? '👆 El celular no dejó compartir. Toca "Compartir" otra vez; si sigue, usa "Guardar".'
+      : '❌ No se pudo compartir. Usa "Guardar".');
   }
 });
 
