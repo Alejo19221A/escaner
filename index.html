@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=2.0.1">
+  <link rel="stylesheet" href="estilos.css?v=2.1">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
@@ -28,6 +28,10 @@
     <symbol id="i-escanear" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></symbol>
     <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
     <symbol id="i-alerta" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></symbol>
+    <symbol id="i-historial" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-usuario" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-compartir" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
+    <symbol id="i-cerrar" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
   </svg>
 
   <!-- Cabecera: nombre y modo (tocar para cambiar) -->
@@ -97,8 +101,10 @@
   <!-- Menú "Más" -->
   <div id="menuMas" class="capaHoja">
     <div class="hojaCaja">
-      <button id="nuevo" class="peligro" disabled><svg class="ic"><use href="#i-borrar"/></svg>Empezar de nuevo</button>
+      <button id="historialBtn"><svg class="ic"><use href="#i-historial"/></svg>Historial de envíos</button>
+      <button id="usuarioBtn"><svg class="ic"><use href="#i-usuario"/></svg><span id="usuarioTexto">Usuario</span></button>
       <button id="reportar"><svg class="ic"><use href="#i-reporte"/></svg>Reportar problema</button>
+      <button id="nuevo" class="peligro" disabled><svg class="ic"><use href="#i-borrar"/></svg>Empezar de nuevo</button>
       <button class="cerrarHoja">Cerrar</button>
       <p id="version"></p>
     </div>
@@ -137,6 +143,7 @@
       <p id="dlgLectura"></p>
       <div id="dlgCampos"></div>
       <p class="aviso" id="dlgAviso">Revisa que cada cédula coincida con su documento</p>
+      <p class="aviso" id="dlgDuplicado"></p>
       <p id="dlgArchivo"></p>
 
       <div class="filaDlg">
@@ -219,8 +226,73 @@
     </div>
   </div>
 
+  <!-- Historial de envíos -->
+  <div id="historialDlg">
+    <div class="txCabecera">
+      <button id="hiCerrar" aria-label="Cerrar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+      <span class="hiTitulo">Historial de envíos</span>
+    </div>
+    <div class="hiCuerpo">
+      <input id="hiBuscar" type="search" placeholder="Buscar por cédula, nombre o archivo" autocomplete="off">
+      <div class="hiFiltros" id="hiDias">
+        <button data-dias="hoy" class="activo">Hoy</button>
+        <button data-dias="ayer">Ayer</button>
+        <button data-dias="todos">7 días</button>
+      </div>
+      <div class="hiFiltros" id="hiTipos">
+        <button data-tipo="todos" class="activo">Todos</button>
+        <button data-tipo="paciente">Paciente</button>
+        <button data-tipo="normal">Documento</button>
+      </div>
+      <div id="hiResumen"></div>
+      <div id="hiLista"></div>
+    </div>
+  </div>
+
+  <!-- Acciones de un envío del historial -->
+  <div id="hiAcciones" class="capaHoja">
+    <div class="hojaCaja">
+      <p id="hiAccTitulo"></p>
+      <button data-hacer="compartir"><svg class="ic"><use href="#i-compartir"/></svg>Reenviar (WhatsApp, Teams...)</button>
+      <button data-hacer="guardar"><svg class="ic"><use href="#i-pdf"/></svg>Guardar de nuevo en el celular</button>
+      <button data-hacer="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar del historial</button>
+      <button data-hacer="" class="cerrarHoja">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- ¿A dónde lo enviaste? (opcional) -->
+  <div id="destinoDlg" class="capaHoja">
+    <div class="hojaCaja">
+      <p>¿A dónde lo enviaste? (opcional)</p>
+      <div class="hojaFila">
+        <button data-destino="WhatsApp">WhatsApp</button>
+        <button data-destino="Teams">Teams</button>
+      </div>
+      <div class="hojaFila">
+        <button data-destino="OneDrive">OneDrive</button>
+        <button data-destino="Otro">Otro</button>
+      </div>
+      <button data-destino="" class="cerrarHoja">Omitir</button>
+    </div>
+  </div>
+
+  <!-- Nombre de quien usa el celular -->
+  <div id="nombreDlg" class="capaCentro">
+    <div class="caja">
+      <h2>¿Quién usa este celular?</h2>
+      <p class="txAyuda">Tu nombre queda en el historial de envíos. Solo se pide una vez.</p>
+      <label>Nombre<input id="usuNombre" autocomplete="off" autocapitalize="words"></label>
+      <label>Apellido<input id="usuApellido" autocomplete="off" autocapitalize="words"></label>
+      <div class="filaDlg">
+        <button id="usuCancelar">Cancelar</button>
+        <button id="usuGuardar">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="cargando"><div>Procesando...</div></div>
 
-  <script src="app.js?v=2.0.1"></script>
+  <script src="app.js?v=2.1"></script>
+  <script src="historial.js?v=2.1"></script>
 </body>
 </html>
