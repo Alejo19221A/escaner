@@ -1,4 +1,4 @@
-const VERSION = '2.2';
+const VERSION = '2.2.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -252,14 +252,19 @@ function enCola(tarea) {
     return cola;
 }
 
-// Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
+ // Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
+// La galería deja elegir varias: se procesan una tras otra (máximo 20 por vez)
 document.querySelectorAll('.entradaFoto').forEach(entrada => {
   entrada.addEventListener('change', (e) => {
-    const archivo = e.target.files[0];
+    let archivos = [...e.target.files];
     e.target.value = '';
-    if (!archivo) return;
+    if (!archivos.length) return;
+    if (archivos.length > 20) {
+      alert('Se pueden elegir hasta 20 fotos a la vez. Se tomarán las primeras 20.');
+      archivos = archivos.slice(0, 20);
+    }
     const deGaleria = !entrada.hasAttribute('capture'); // la galería no tiene "capture"
-    enCola(() => manejarFoto(archivo, deGaleria));
+    archivos.forEach(archivo => enCola(() => manejarFoto(archivo, deGaleria)));
   });
 });
 

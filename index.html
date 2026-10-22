@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-    <link rel="stylesheet" href="estilos.css?v=2.2">
+  <link rel="stylesheet" href="estilos.css?v=2.2.1">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
@@ -79,7 +79,7 @@
     </label>
     <label class="barraBtn">
       <svg class="ic"><use href="#i-galeria"/></svg><span>Galería</span>
-      <input type="file" accept="image/*" class="entradaFoto" hidden>
+            <input type="file" accept="image/*" class="entradaFoto" multiple hidden>
     </label>
     <button class="barraBtn" id="masBtn">
       <svg class="ic"><use href="#i-menu"/></svg><span>Más</span>
@@ -306,7 +306,7 @@
 
   <div id="cargando"><div>Procesando...</div></div>
 
-    <script src="app.js?v=2.2"></script>
-  <script src="historial.js?v=2.2"></script>
+  <script src="app.js?v=2.2.1"></script>
+  <script src="historial.js?v=2.2.1"></script>
 </body>
 </html>
