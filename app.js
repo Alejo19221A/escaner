@@ -1,4 +1,4 @@
-const VERSION = '2.1';
+const VERSION = '2.1.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas

@@ -1,8 +1,9 @@
 // =====================================================================
-// historial.js – Historial de envíos (versión 2.1)
+// historial.js – Historial de envíos (versión 2.1.1)
 // Guarda en ESTE celular cada PDF que se comparte o se guarda, con su
 // registro: quién lo envió, cuándo, de qué paciente y cómo salió.
 // Se borra solo a los 7 días. Nada sale del celular.
+// La vista previa usa PDF.js (libs/pdfjs), que se carga solo al usarla.
 // Usa funciones de app.js, por eso se carga DESPUÉS de app.js.
 // =====================================================================
 const DIAS_HISTORIAL = 7;
@@ -99,9 +100,26 @@ document.getElementById('usuApellido').addEventListener('keydown', e => { if (e.
 document.getElementById('usuCancelar').addEventListener('click', () => nombreDlg.classList.remove('visible'));
 document.getElementById('usuarioBtn').addEventListener('click', () => abrirNombre(false));
 
-// ---------- ¿A dónde lo enviaste? (opcional, un toque) ----------
+// ---------- ¿A dónde lo enviaste? (opcional; recuerda la última elección) ----------
+const destinoActivo = () => localStorage.getItem('preguntarDestino') !== 'no';
+function actualizarOpcionDestino() {
+  document.getElementById('destinoOpcionTexto').textContent =
+    `Preguntar destino al compartir: ${destinoActivo() ? 'Sí' : 'No'}`;
+}
+document.getElementById('destinoOpcionBtn').addEventListener('click', () => {
+  localStorage.setItem('preguntarDestino', destinoActivo() ? 'no' : 'si');
+  actualizarOpcionDestino();
+  estado.textContent = destinoActivo()
+    ? '✅ La app preguntará a dónde enviaste cada PDF'
+    : '✅ La app ya no preguntará a dónde enviaste';
+});
+
 function preguntarDestino() {
+  if (!destinoActivo()) return Promise.resolve('');
   const capa = document.getElementById('destinoDlg');
+  const ultimo = localStorage.getItem('ultimoDestino') || '';
+  capa.querySelectorAll('button[data-destino]').forEach(b =>
+    b.classList.toggle('sugerido', !!ultimo && b.dataset.destino === ultimo));
   capa.classList.add('visible');
   return new Promise(resolve => {
     capa.onclick = e => {
@@ -109,7 +127,9 @@ function preguntarDestino() {
       if (e.target !== capa && !boton) return;
       capa.classList.remove('visible');
       capa.onclick = null;
-      resolve(boton ? boton.dataset.destino : '');
+      const elegido = boton ? boton.dataset.destino : '';
+      if (elegido) localStorage.setItem('ultimoDestino', elegido);
+      resolve(elegido);
     };
   });
 }
@@ -170,10 +190,8 @@ function textoDuplicados(lista) {
 
 // ---------- Pantalla del historial ----------
 const historialDlg = document.getElementById('historialDlg');
-const hiAcciones = document.getElementById('hiAcciones');
 let hiFiltroDias = 'hoy';
 let hiFiltroTipo = 'todos';
-let hiSeleccion = null;
 
 function filtrarEnvios() {
   const texto = sinTildes(document.getElementById('hiBuscar').value.trim());
@@ -266,23 +284,140 @@ document.getElementById('hiTipos').addEventListener('click', e => {
   dibujarHistorial();
 });
 
-// Tocar un envío: Reenviar, Guardar de nuevo o Borrar
+// Tocar un envío: se abre la vista previa
 document.getElementById('hiLista').addEventListener('click', e => {
   const item = e.target.closest('.hiItem');
   if (!item) return;
-  hiSeleccion = enviosCache.find(r => r.id === item.dataset.id);
-  if (!hiSeleccion) return;
-  document.getElementById('hiAccTitulo').textContent = hiSeleccion.archivo;
-  hiAcciones.classList.add('visible');
+  const r = enviosCache.find(x => x.id === item.dataset.id);
+  if (r) abrirVisor(r);
 });
 
-hiAcciones.addEventListener('click', async e => {
+// ---------- Vista previa del PDF (PDF.js) ----------
+const visorDlg = document.getElementById('visorDlg');
+const viPaginas = document.getElementById('viPaginas');
+let viRegistro = null;  // envío que se está viendo
+let viURLs = [];        // imágenes de las páginas (se liberan al cerrar)
+let viTurno = 0;        // evita mezclar páginas si se abre otro PDF rápido
+let viZoom = 1;
+let pdfjsPromesa = null;
+
+// Carga PDF.js solo la primera vez que se necesita
+function cargarPDFjs() {
+  if (!pdfjsPromesa) {
+    pdfjsPromesa = new Promise((resolve, reject) => {
+      if (window.pdfjsLib) { resolve(window.pdfjsLib); return; }
+      const s = document.createElement('script');
+      s.src = 'libs/pdfjs/pdf.min.js';
+      s.onload = () => {
+        const lib = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+        if (!lib) { reject(new Error('PDF.js no cargó')); return; }
+        lib.GlobalWorkerOptions.workerSrc = 'libs/pdfjs/pdf.worker.min.js';
+        resolve(lib);
+      };
+      s.onerror = () => reject(new Error('No se encontró libs/pdfjs/pdf.min.js'));
+      document.head.appendChild(s);
+    });
+    pdfjsPromesa.catch(() => { pdfjsPromesa = null; });
+  }
+  return pdfjsPromesa;
+}
+
+function limpiarVisor() {
+  viURLs.forEach(u => URL.revokeObjectURL(u));
+  viURLs = [];
+  viPaginas.innerHTML = '';
+}
+
+async function abrirVisor(r) {
+  const turno = ++viTurno;
+  viRegistro = r;
+  limpiarVisor();
+  document.getElementById('viTitulo').textContent = r.archivo;
+  visorDlg.classList.add('visible');
+  ponerZoom(1);
+  viPaginas.scrollTop = 0;
+  viPaginas.innerHTML = '<p class="viCargando">Cargando vista previa...</p>';
+  let doc = null;
+  try {
+    const lib = await cargarPDFjs();
+    const datos = new Uint8Array(await r.pdf.arrayBuffer());
+    // isEvalSupported: false = protección contra PDF maliciosos
+    doc = await lib.getDocument({ data: datos, isEvalSupported: false }).promise;
+    if (turno !== viTurno) return;
+    viPaginas.innerHTML = '';
+    const anchoMeta = Math.min(1400, Math.round(viPaginas.clientWidth * (window.devicePixelRatio || 1) * 1.5));
+    for (let n = 1; n <= doc.numPages; n++) {
+      if (turno !== viTurno) return;
+      const pagina = await doc.getPage(n);
+      const base = pagina.getViewport({ scale: 1 });
+      const vista = pagina.getViewport({ scale: anchoMeta / base.width });
+      const c = document.createElement('canvas');
+      c.width = Math.round(vista.width);
+      c.height = Math.round(vista.height);
+      await pagina.render({ canvasContext: c.getContext('2d'), viewport: vista }).promise;
+      const blob = await aBlob(c, 0.85); // de app.js: la página como imagen liviana
+      liberar(c);
+      pagina.cleanup();
+      if (turno !== viTurno) return;
+      const url = URL.createObjectURL(blob);
+      viURLs.push(url);
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = `Página ${n}`;
+      viPaginas.appendChild(img);
+    }
+  } catch (err) {
+    console.error(err);
+    if (turno === viTurno) {
+      viPaginas.innerHTML = '<p class="viCargando">No se pudo mostrar la vista previa. Puedes reenviarlo o guardarlo.</p>';
+    }
+  } finally {
+    if (doc) doc.destroy();
+  }
+}
+
+function cerrarVisor() {
+  viTurno++;
+  visorDlg.classList.remove('visible');
+  limpiarVisor();
+  viRegistro = null;
+}
+document.getElementById('viCerrar').addEventListener('click', cerrarVisor);
+
+// Zoom: botones y pellizco con dos dedos (mantiene el punto que se está mirando)
+function ponerZoom(nuevo, cx = viPaginas.clientWidth / 2, cy = viPaginas.clientHeight / 2) {
+  nuevo = Math.min(4, Math.max(1, nuevo));
+  const f = nuevo / viZoom;
+  const x = viPaginas.scrollLeft + cx, y = viPaginas.scrollTop + cy;
+  viZoom = nuevo;
+  viPaginas.style.setProperty('--zoom', nuevo);
+  viPaginas.scrollLeft = x * f - cx;
+  viPaginas.scrollTop = y * f - cy;
+}
+document.getElementById('viMas').addEventListener('click', () => ponerZoom(viZoom * 1.5));
+document.getElementById('viMenos').addEventListener('click', () => ponerZoom(viZoom / 1.5));
+document.getElementById('viAjustar').addEventListener('click', () => ponerZoom(1));
+
+let viDist = 0, viZoomInicio = 1;
+const distanciaDedos = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+viPaginas.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) { viDist = distanciaDedos(e.touches); viZoomInicio = viZoom; }
+}, { passive: true });
+viPaginas.addEventListener('touchmove', e => {
+  if (e.touches.length !== 2 || !viDist) return;
+  e.preventDefault();
+  const caja = viPaginas.getBoundingClientRect();
+  const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - caja.left;
+  const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - caja.top;
+  ponerZoom(viZoomInicio * distanciaDedos(e.touches) / viDist, cx, cy);
+}, { passive: false });
+viPaginas.addEventListener('touchend', e => { if (e.touches.length < 2) viDist = 0; });
+
+// Botones de abajo: Reenviar, Guardar y Borrar
+document.querySelector('.viPie').addEventListener('click', async e => {
   const boton = e.target.closest('button[data-hacer]');
-  if (e.target !== hiAcciones && !boton) return;
-  hiAcciones.classList.remove('visible');
-  const r = hiSeleccion;
-  hiSeleccion = null;
-  if (!boton || !boton.dataset.hacer || !r) return;
+  if (!boton || !viRegistro) return;
+  const r = viRegistro;
   const accion = boton.dataset.hacer;
 
   if (accion === 'compartir') await reenviar(r);
@@ -296,6 +431,7 @@ hiAcciones.addEventListener('click', async e => {
     try {
       await enHistorial(a => a.delete(r.id));
       enviosCache = enviosCache.filter(x => x.id !== r.id);
+      cerrarVisor();
       dibujarHistorial();
     } catch (err) {
       console.error(err);
@@ -329,9 +465,11 @@ async function reenviar(r) {
     console.error(err);
   }
   dibujarHistorial();
+  estado.textContent = '✅ Reenvío anotado en el historial';
 }
 
 // ---------- Al abrir la app ----------
 cargarHistorial();
 actualizarUsuarioMenu();
+actualizarOpcionDestino();
 if (!usuarioActual()) abrirNombre(true);

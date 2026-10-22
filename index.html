@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=2.1">
+  <link rel="stylesheet" href="estilos.css?v=2.1.1>
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
@@ -32,6 +32,9 @@
     <symbol id="i-usuario" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
     <symbol id="i-compartir" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
     <symbol id="i-cerrar" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+        <symbol id="i-mas" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menos" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-ajustar" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
   </svg>
 
   <!-- Cabecera: nombre y modo (tocar para cambiar) -->
@@ -103,6 +106,7 @@
     <div class="hojaCaja">
       <button id="historialBtn"><svg class="ic"><use href="#i-historial"/></svg>Historial de envíos</button>
       <button id="usuarioBtn"><svg class="ic"><use href="#i-usuario"/></svg><span id="usuarioTexto">Usuario</span></button>
+            <button id="destinoOpcionBtn"><svg class="ic"><use href="#i-compartir"/></svg><span id="destinoOpcionTexto">Preguntar destino al compartir: Sí</span></button>
       <button id="reportar"><svg class="ic"><use href="#i-reporte"/></svg>Reportar problema</button>
       <button id="nuevo" class="peligro" disabled><svg class="ic"><use href="#i-borrar"/></svg>Empezar de nuevo</button>
       <button class="cerrarHoja">Cerrar</button>
@@ -249,14 +253,22 @@
     </div>
   </div>
 
-  <!-- Acciones de un envío del historial -->
-  <div id="hiAcciones" class="capaHoja">
-    <div class="hojaCaja">
-      <p id="hiAccTitulo"></p>
-      <button data-hacer="compartir"><svg class="ic"><use href="#i-compartir"/></svg>Reenviar (WhatsApp, Teams...)</button>
-      <button data-hacer="guardar"><svg class="ic"><use href="#i-pdf"/></svg>Guardar de nuevo en el celular</button>
-      <button data-hacer="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar del historial</button>
-      <button data-hacer="" class="cerrarHoja">Cancelar</button>
+    <!-- Vista previa de un PDF del historial -->
+  <div id="visorDlg">
+    <div class="txCabecera">
+      <button id="viCerrar" aria-label="Cerrar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+      <span class="hiTitulo" id="viTitulo"></span>
+    </div>
+    <div id="viPaginas"></div>
+    <div class="viZoom">
+      <button id="viMas" aria-label="Acercar"><svg class="ic"><use href="#i-mas"/></svg></button>
+      <button id="viMenos" aria-label="Alejar"><svg class="ic"><use href="#i-menos"/></svg></button>
+      <button id="viAjustar" aria-label="Ver completo"><svg class="ic"><use href="#i-ajustar"/></svg></button>
+    </div>
+    <div class="viPie">
+      <button data-hacer="compartir"><svg class="ic"><use href="#i-compartir"/></svg>Reenviar</button>
+      <button data-hacer="guardar"><svg class="ic"><use href="#i-pdf"/></svg>Guardar</button>
+      <button data-hacer="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar</button>
     </div>
   </div>
 
@@ -292,7 +304,7 @@
 
   <div id="cargando"><div>Procesando...</div></div>
 
-  <script src="app.js?v=2.1"></script>
-  <script src="historial.js?v=2.1"></script>
+  <script src="app.js?v=2.1.1></script>
+  <script src="historial.js?v=2.1.1></script>
 </body>
 </html>
