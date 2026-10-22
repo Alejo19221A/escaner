@@ -1,4 +1,4 @@
-const VERSION = '2.1.1';
+const VERSION = '2.2';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -254,76 +254,98 @@ function enCola(tarea) {
 
 // Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
 document.querySelectorAll('.entradaFoto').forEach(entrada => {
-    entrada.addEventListener('change', (e) => {
-        const archivo = e.target.files[0];
-        e.target.value = '';
-        if (!archivo) return;
-        enCola(() => manejarFoto(archivo));
-    });
+  entrada.addEventListener('change', (e) => {
+    const archivo = e.target.files[0];
+    e.target.value = '';
+    if (!archivo) return;
+    const deGaleria = !entrada.hasAttribute('capture'); // la galería no tiene "capture"
+    enCola(() => manejarFoto(archivo, deGaleria));
+  });
 });
 
-async function manejarFoto(archivo) {
-    await mostrarCargando(true);
-    let base = null;
-    try {
-        const img = await cargarImagen(archivo);
-        base = copiaReducida(img, 3000).canvas; // 3000 px alcanzan para 200 DPI
-        URL.revokeObjectURL(img.src);
-
-        if (!opencvListo) { // plan B: sin recorte
-            await agregarPagina(base, null);
-            return;
-        }
-
-        // Hasta 3 propuestas automáticas, afinadas en los bordes
-        let opciones = detectarCandidatos(base);
-        if (opciones.length) opciones = refinarVarias(base, opciones);
-        const detectada = opciones.length > 0;
-        const borrosa = detectada && medirNitidez(base, opciones[0]) < UMBRAL_NITIDEZ;
-
-        let mensaje = '✋ No encontré la hoja: ajusta el recuadro';
-        if (detectada) {
-            mensaje = opciones.length > 1
-                ? '✅ Revisa el recorte. ¿No es la hoja? Toca 🔄 Otra opción'
-                : '✅ Revisa el recorte y toca Listo';
-        }
-        if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
-
-        // Siempre se muestra el editor para confirmar
-        mostrarCargando(false);
-        const esquinas = await abrirEditor(base, detectada ? opciones : [esquinasPorDefecto(base)],
-            mensaje, true, borrosa);
-        if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
-
-        await mostrarCargando(true);
-        await agregarPagina(base, esquinas);
-    } catch (err) {
-        console.error(err);
-        estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
-    } finally {
-        liberar(base);
-        mostrarCargando(false);
-    }
+// ¿Es una captura de pantalla? (ya viene derecha: no hay que buscar la hoja ni enderezarla)
+function pareceCaptura(archivo, base) {
+  const nombre = (archivo.name || '').toLowerCase();
+  if (/screenshot|captura|pantallazo|screen/.test(nombre)) return true;
+  if (archivo.type === 'image/png') return true;
+  const proporcion = Math.max(base.width, base.height) / Math.min(base.width, base.height);
+  return proporcion >= 1.9; // pantalla de celular: mucho más alargada que una foto
 }
 
-async function agregarPagina(base, esquinas) {
-    const pagina = { id: nuevoId(), baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
-    await procesarPagina(pagina, base);
-    paginas.push(pagina);
-    if (respaldoActivo) {
-        respaldarPagina(pagina);
-        respaldarSesion();
-    } else {
-        // Después de guardar un PDF el respaldo estaba apagado: al seguir trabajando se vuelve a activar
-        respaldoActivo = true;
-        respaldarTodo();
+async function manejarFoto(archivo, deGaleria = false) {
+  await mostrarCargando(true);
+  let base = null;
+  try {
+    const img = await cargarImagen(archivo);
+    base = copiaReducida(img, 3000).canvas; // 3000 px alcanzan para 200 DPI
+    URL.revokeObjectURL(img.src);
+
+    if (!opencvListo) { // plan B: sin recorte
+      await agregarPagina(base, null);
+      return;
     }
-    estado.textContent = esquinas
-        ? `✅ Página ${paginas.length} lista (${pagina.formato})`
-        : `📄 Página ${paginas.length} lista (sin recorte)`;
-    mostrarPaginas();
-    if (tipoDoc === 'paciente') leerPagina(pagina); // lee la cédula en segundo plano
-    return pagina;
+
+    // Captura de pantalla: se propone la imagen completa, sin deformarla
+    if (deGaleria && pareceCaptura(archivo, base)) {
+      mostrarCargando(false);
+      const esquinas = await abrirEditor(base, [esquinasCompletas(base)],
+        'Captura de pantalla: se usa completa, sin recortar. Toca Listo', true);
+      if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
+      await mostrarCargando(true);
+      await agregarPagina(base, esquinas);
+      return;
+    }
+
+    // Hasta 3 propuestas automáticas, afinadas en los bordes
+    let opciones = detectarCandidatos(base);
+    if (opciones.length) opciones = refinarVarias(base, opciones);
+    const detectada = opciones.length > 0;
+    const borrosa = detectada && medirNitidez(base, opciones[0]) < UMBRAL_NITIDEZ;
+
+    let mensaje = '✋ No encontré la hoja: ajusta el recuadro';
+    if (detectada) {
+      mensaje = opciones.length > 1
+        ? '✅ Revisa el recorte. ¿No es la hoja? Toca 🔄 Otra opción'
+        : '✅ Revisa el recorte y toca Listo';
+    }
+    if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
+
+    // Siempre se muestra el editor para confirmar
+    mostrarCargando(false);
+    const esquinas = await abrirEditor(base, detectada ? opciones : [esquinasPorDefecto(base)],
+      mensaje, true, borrosa);
+    if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
+
+    await mostrarCargando(true);
+    await agregarPagina(base, esquinas);
+  } catch (err) {
+    console.error(err);
+    estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
+  } finally {
+    liberar(base);
+    mostrarCargando(false);
+  }
+}
+
+// leerCedula: en modo Paciente, si se lee la cédula de esta página (al abrir un PDF, solo las 2 primeras)
+async function agregarPagina(base, esquinas, leerCedula = true) {
+  const pagina = { id: nuevoId(), baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
+  await procesarPagina(pagina, base);
+  paginas.push(pagina);
+  if (respaldoActivo) {
+    respaldarPagina(pagina);
+    respaldarSesion();
+  } else {
+    // Después de guardar un PDF el respaldo estaba apagado: al seguir trabajando se vuelve a activar
+    respaldoActivo = true;
+    respaldarTodo();
+  }
+  estado.textContent = esquinas
+    ? `✅ Página ${paginas.length} lista (${pagina.formato})`
+    : `📄 Página ${paginas.length} lista (sin recorte)`;
+  mostrarPaginas();
+  if (tipoDoc === 'paciente' && leerCedula) leerPagina(pagina); // lee la cédula en segundo plano
+  return pagina;
 }
 
 function cargarImagen(archivo) {

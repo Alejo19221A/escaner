@@ -473,3 +473,63 @@ cargarHistorial();
 actualizarUsuarioMenu();
 actualizarOpcionDestino();
 if (!usuarioActual()) abrirNombre(true);
+
+// ---------- Abrir PDF: convierte cada página de un PDF en una página escaneada ----------
+const MAX_PAGINAS_PDF = 30;
+
+document.getElementById('abrirPdfBtn').addEventListener('click', () => {
+  document.getElementById('entradaPDF').click();
+});
+document.getElementById('entradaPDF').addEventListener('change', e => {
+  const archivo = e.target.files[0];
+  e.target.value = '';
+  if (!archivo) return;
+  enCola(() => importarPDF(archivo)); // en fila, igual que las fotos
+});
+
+async function importarPDF(archivo) {
+  const textoCargando = document.querySelector('#cargando div');
+  await mostrarCargando(true);
+  let doc = null;
+  try {
+    textoCargando.textContent = 'Abriendo PDF...';
+    const lib = await cargarPDFjs();
+    const datos = new Uint8Array(await archivo.arrayBuffer());
+    // isEvalSupported: false = protección contra PDF maliciosos
+    doc = await lib.getDocument({ data: datos, isEvalSupported: false }).promise;
+    const total = doc.numPages;
+    if (total > MAX_PAGINAS_PDF &&
+        !confirm(`El PDF tiene ${total} páginas. Se traerán las primeras ${MAX_PAGINAS_PDF}. ¿Continuar?`)) {
+      return;
+    }
+    const cuantas = Math.min(total, MAX_PAGINAS_PDF);
+    for (let n = 1; n <= cuantas; n++) {
+      textoCargando.textContent = `Abriendo PDF: página ${n} de ${cuantas}...`;
+      const pagina = await doc.getPage(n);
+      // Tamaño a 200 DPI (el PDF mide en puntos: 72 por pulgada), sin pasarse de 2800 px
+      let vista = pagina.getViewport({ scale: DPI / 72 });
+      const lado = Math.max(vista.width, vista.height);
+      if (lado > 2800) vista = pagina.getViewport({ scale: (DPI / 72) * (2800 / lado) });
+      const c = document.createElement('canvas');
+      c.width = Math.round(vista.width);
+      c.height = Math.round(vista.height);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, c.width, c.height);
+      await pagina.render({ canvasContext: ctx, viewport: vista }).promise;
+      pagina.cleanup();
+      await agregarPagina(c, null, n <= 2); // la cédula solo se busca en las 2 primeras
+      liberar(c);
+    }
+    estado.textContent = `✅ Se agregaron ${cuantas} ${cuantas === 1 ? 'página' : 'páginas'} del PDF`;
+  } catch (err) {
+    console.error(err);
+    estado.textContent = err && err.name === 'PasswordException'
+      ? '❌ Ese PDF tiene contraseña: no se puede abrir'
+      : '❌ No se pudo abrir el PDF';
+  } finally {
+    if (doc) doc.destroy();
+    textoCargando.textContent = 'Procesando...';
+    mostrarCargando(false);
+  }
+}
