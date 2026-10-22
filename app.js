@@ -1,4 +1,4 @@
-const VERSION = '2.2.1';
+const VERSION = '2.3';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -252,8 +252,9 @@ function enCola(tarea) {
     return cola;
 }
 
- // Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
-// La galería deja elegir varias: se procesan una tras otra (máximo 20 por vez)
+// Todos los botones de foto (Escanear, Galería, Listo y otra) usan esto
+// Varias fotos de la galería: se agregan solas con el recorte automático (máximo 20 por vez);
+// después se puede tocar cada una para ajustar el recorte
 document.querySelectorAll('.entradaFoto').forEach(entrada => {
   entrada.addEventListener('change', (e) => {
     let archivos = [...e.target.files];
@@ -264,7 +265,16 @@ document.querySelectorAll('.entradaFoto').forEach(entrada => {
       archivos = archivos.slice(0, 20);
     }
     const deGaleria = !entrada.hasAttribute('capture'); // la galería no tiene "capture"
-    archivos.forEach(archivo => enCola(() => manejarFoto(archivo, deGaleria)));
+    if (archivos.length === 1) {
+      enCola(() => manejarFoto(archivos[0], deGaleria));
+      return;
+    }
+    const total = archivos.length;
+    archivos.forEach((archivo, i) =>
+      enCola(() => manejarFoto(archivo, deGaleria, { numero: i + 1, total })));
+    enCola(async () => {
+      estado.textContent = `✅ Se agregaron ${total} fotos. Toca una para ajustar el recorte`;
+    });
   });
 });
 
@@ -277,7 +287,10 @@ function pareceCaptura(archivo, base) {
   return proporcion >= 1.9; // pantalla de celular: mucho más alargada que una foto
 }
 
-async function manejarFoto(archivo, deGaleria = false) {
+// lote: si vienen varias fotos a la vez ({ numero, total }), se agregan solas, sin abrir el editor
+async function manejarFoto(archivo, deGaleria = false, lote = null) {
+  const textoCargando = document.querySelector('#cargando div');
+  if (lote) textoCargando.textContent = `Procesando foto ${lote.numero} de ${lote.total}...`;
   await mostrarCargando(true);
   let base = null;
   try {
@@ -290,8 +303,22 @@ async function manejarFoto(archivo, deGaleria = false) {
       return;
     }
 
+    const esCaptura = deGaleria && pareceCaptura(archivo, base);
+
+    // Varias fotos a la vez: recorte automático, sin abrir el editor
+    if (lote) {
+      let esquinas = esquinasCompletas(base);
+      if (!esCaptura) {
+        let opciones = detectarCandidatos(base);
+        if (opciones.length) opciones = refinarVarias(base, opciones);
+        if (opciones.length) esquinas = opciones[0];
+      }
+      await agregarPagina(base, esquinas);
+      return;
+    }
+
     // Captura de pantalla: se propone la imagen completa, sin deformarla
-    if (deGaleria && pareceCaptura(archivo, base)) {
+    if (esCaptura) {
       mostrarCargando(false);
       const esquinas = await abrirEditor(base, [esquinasCompletas(base)],
         'Captura de pantalla: se usa completa, sin recortar. Toca Listo', true);
@@ -328,6 +355,7 @@ async function manejarFoto(archivo, deGaleria = false) {
     estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
   } finally {
     liberar(base);
+    textoCargando.textContent = 'Procesando...';
     mostrarCargando(false);
   }
 }
@@ -1162,25 +1190,34 @@ document.querySelectorAll('.modo').forEach(boton => {
 });
 
 // ---------- 9. Mostrar, ordenar, girar y borrar páginas ----------
-function mostrarPaginas() {
-    const contenedor = document.getElementById('paginas');
-    contenedor.innerHTML = '';
-    paginas.forEach((pag, i) => {
-        const d = document.createElement('div');
-        d.className = 'pagina';
-        d.innerHTML = `<img src="${pag.finalURL}" alt="Página ${i + 1}"><span>${i + 1}</span>` +
-            (pag.formato ? `<small>${pag.formato}</small>` : '');
-        d.onclick = () => abrirMenuPagina(i);
-        contenedor.appendChild(d);
-    });
-    const n = paginas.length;
-    document.getElementById('vacio').style.display = n ? 'none' : 'block';
-    document.getElementById('ayudaPaginas').style.display = n ? 'block' : 'none';
-    document.getElementById('pdf').disabled = n === 0;
-    document.getElementById('pdfCuenta').textContent = n ? `(${n})` : '';
-    document.getElementById('textoBtn').disabled = n === 0;
-    document.getElementById('nuevo').disabled = n === 0;
-    actualizarCabecera();
+ function mostrarPaginas() {
+  // Quitar de la selección las páginas que ya no existen
+  seleccionadas.forEach(id => { if (!paginas.some(p => p.id === id)) seleccionadas.delete(id); });
+  if (modoSeleccion && !paginas.length) modoSeleccion = false;
+
+  const contenedor = document.getElementById('paginas');
+  contenedor.innerHTML = '';
+  paginas.forEach((pag, i) => {
+    const marcada = seleccionadas.has(pag.id);
+    const d = document.createElement('div');
+    d.className = 'pagina' + (marcada ? ' marcada' : '');
+    d.innerHTML = `<img src="${pag.finalURL}" alt="Página ${i + 1}" draggable="false"><span>${i + 1}</span>` +
+      (pag.formato ? `<small>${pag.formato}</small>` : '') +
+      (modoSeleccion ? `<div class="check">${marcada ? '<svg class="ic"><use href="#i-check"/></svg>' : ''}</div>` : '');
+    d.onclick = () => (modoSeleccion ? alternarSeleccion(pag.id) : abrirMenuPagina(i));
+    // Mantener presionada: entra en modo selección
+    d.oncontextmenu = e => { e.preventDefault(); if (!modoSeleccion) entrarSeleccion(pag.id); };
+    contenedor.appendChild(d);
+  });
+  const n = paginas.length;
+  document.getElementById('vacio').style.display = n ? 'none' : 'block';
+  document.getElementById('ayudaPaginas').style.display = n && !modoSeleccion ? 'block' : 'none';
+  document.getElementById('pdf').disabled = n === 0;
+  document.getElementById('pdfCuenta').textContent = n ? `(${n})` : '';
+  document.getElementById('textoBtn').disabled = n === 0;
+  document.getElementById('nuevo').disabled = n === 0;
+  actualizarCabecera();
+  actualizarBarraSeleccion();
 }
 
 function moverPagina(i, direccion) {
@@ -2589,6 +2626,59 @@ function cerrarTexto() {
     respaldarSesion();
 }
 porId('txCerrar').onclick = cerrarTexto;
+
+// ---------- 15c. Seleccionar varias páginas (mantener presionada) ----------
+// Va ANTES del bloque 15b, porque 15b dibuja las páginas al abrir y necesita estas variables
+let modoSeleccion = false;
+const seleccionadas = new Set(); // ids de las páginas marcadas
+
+function entrarSeleccion(id) {
+  modoSeleccion = true;
+  seleccionadas.clear();
+  seleccionadas.add(id);
+  if (navigator.vibrate) navigator.vibrate(30); // pequeña vibración, como en las apps
+  mostrarPaginas();
+}
+function salirSeleccion() {
+  modoSeleccion = false;
+  seleccionadas.clear();
+  mostrarPaginas();
+}
+function alternarSeleccion(id) {
+  if (seleccionadas.has(id)) seleccionadas.delete(id); else seleccionadas.add(id);
+  if (!seleccionadas.size) { salirSeleccion(); return; }
+  mostrarPaginas();
+}
+function actualizarBarraSeleccion() {
+  document.body.classList.toggle('seleccionando', modoSeleccion);
+  const n = seleccionadas.size;
+  document.getElementById('selCuenta').textContent = `${n} ${n === 1 ? 'seleccionada' : 'seleccionadas'}`;
+  document.getElementById('selTodas').textContent = n === paginas.length ? 'Ninguna' : 'Todas';
+}
+document.getElementById('selCancelar').addEventListener('click', salirSeleccion);
+document.getElementById('selTodas').addEventListener('click', () => {
+  if (seleccionadas.size === paginas.length) { salirSeleccion(); return; }
+  paginas.forEach(p => seleccionadas.add(p.id));
+  mostrarPaginas();
+});
+document.getElementById('selBorrar').addEventListener('click', () => {
+  const n = seleccionadas.size;
+  if (!n || !confirm(`¿Borrar ${n} ${n === 1 ? 'página' : 'páginas'}?`)) return;
+  for (let i = paginas.length - 1; i >= 0; i--) {
+    const p = paginas[i];
+    if (seleccionadas.has(p.id)) {
+      URL.revokeObjectURL(p.finalURL);
+      paginas.splice(i, 1);
+      quitarPaginaRespaldo(p.id);
+    }
+  }
+  modoSeleccion = false;
+  seleccionadas.clear();
+  mostrarPaginas();
+  respaldarSesion();
+  estado.textContent = `✅ Se borraron ${n} ${n === 1 ? 'página' : 'páginas'}`;
+});
+
 // ---------- 15b. Diseño 2.0: cabecera, menús y avisos flotantes ----------
 
 // Cabecera: muestra el modo y, en Paciente, la cédula leída de la primera página
@@ -2627,6 +2717,7 @@ hoja.addEventListener('click', e => {
     const accion = boton.dataset.accion;
     if (accion === 'recorte') editarPagina(i);
     if (accion === 'girar') rotarPagina(i);
+    if (accion === 'seleccionar') entrarSeleccion(paginas[i].id);
     if (accion === 'antes') moverPagina(i, -1);
     if (accion === 'despues') moverPagina(i, 1);
     if (accion === 'borrar' && confirm(`¿Borrar la página ${i + 1}?`)) borrarPagina(i);

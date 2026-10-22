@@ -332,3 +332,22 @@ main { padding: 14px 16px 0; text-align: center; }
 
 /* Destino sugerido: la última elección sale resaltada */
 #destinoDlg button.sugerido { background: var(--modo); color: white; font-weight: bold; }
+
+/* ---------- Seleccionar varias páginas ---------- */
+.pagina img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.pagina.marcada { outline: 3px solid var(--azul); transform: scale(0.96); transition: transform 0.15s; }
+.pagina .check { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; box-sizing: border-box;
+                 border-radius: 50%; background: white; border: 2px solid var(--azul); color: white;
+                 display: flex; align-items: center; justify-content: center; }
+.pagina.marcada .check { background: var(--azul); }
+.pagina .check .ic { width: 18px; height: 18px; stroke-width: 2.5; }
+#barraSel { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; align-items: center;
+            gap: 8px; background: white; border-top: 1px solid #e3e6eb;
+            padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+body.seleccionando #barraSel { display: flex; }
+body.seleccionando .barra { display: none; }
+#selCuenta { flex: 1; font-weight: bold; color: var(--marino); }
+#barraSel button { display: flex; align-items: center; gap: 6px; border: none; border-radius: 10px;
+                   padding: 10px 14px; min-height: 44px; font-size: 15px; background: var(--fondo); color: #1f2937; }
+#barraSel #selCancelar { padding: 10px; }
+#barraSel .peligro { background: #fce8e6; color: #d93025; }

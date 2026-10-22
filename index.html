@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=2.2.1">
+  <link rel="stylesheet" href="estilos.css?v=2.3">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
@@ -35,6 +35,7 @@
     <symbol id="i-mas" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-menos" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
     <symbol id="i-ajustar" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></symbol>
   </svg>
 
   <!-- Cabecera: nombre y modo (tocar para cambiar) -->
@@ -62,7 +63,7 @@
     </div>
 
     <div id="paginas"></div>
-    <p id="ayudaPaginas">Toca una página para ajustarla</p>
+      <p id="ayudaPaginas">Toca una página para ajustarla · mantenla presionada para seleccionar varias</p>
   </main>
 
   <!-- Barra de abajo -->
@@ -86,12 +87,21 @@
     </button>
   </nav>
 
+  <!-- Barra de selección (al mantener presionada una página) -->
+  <div id="barraSel">
+    <button id="selCancelar" aria-label="Cancelar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+    <span id="selCuenta">0 seleccionadas</span>
+    <button id="selTodas">Todas</button>
+    <button id="selBorrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar</button>
+  </div>
+
   <!-- Menú de una página (al tocar una miniatura) -->
   <div id="hoja" class="capaHoja">
     <div class="hojaCaja">
       <p id="hojaTitulo">Página</p>
       <button data-accion="recorte"><svg class="ic"><use href="#i-recorte"/></svg>Ajustar recorte</button>
       <button data-accion="girar"><svg class="ic"><use href="#i-girar"/></svg>Girar</button>
+      <button data-accion="seleccionar"><svg class="ic"><use href="#i-check"/></svg>Seleccionar varias</button>
       <div class="hojaFila">
         <button data-accion="antes"><svg class="ic"><use href="#i-izq"/></svg>Mover antes</button>
         <button data-accion="despues">Mover después<svg class="ic"><use href="#i-der"/></svg></button>
@@ -306,7 +316,7 @@
 
   <div id="cargando"><div>Procesando...</div></div>
 
-  <script src="app.js?v=2.2.1"></script>
-  <script src="historial.js?v=2.2.1"></script>
+  <script src="app.js?v=2.3"></script>
+  <script src="historial.js?v=2.3"></script>
 </body>
 </html>
