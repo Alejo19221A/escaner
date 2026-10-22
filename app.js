@@ -1,4 +1,4 @@
-const VERSION = '2.0';
+const VERSION = '2.0.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -2559,12 +2559,11 @@ function cerrarTexto() {
 }
 porId('txCerrar').onclick = cerrarTexto;
 // ---------- 15b. Diseño 2.0: cabecera, menús y avisos flotantes ----------
-const iconoCambiar = '<svg class="ic"><use href="#i-cambiar"/></svg>';
 
 // Cabecera: muestra el modo y, en Paciente, la cédula leída de la primera página
 function actualizarCabecera() {
   const btn = document.getElementById('modoBtn');
-  const poner = texto => { btn.innerHTML = `<span>${texto}</span>${iconoCambiar}`; };
+    const poner = texto => { btn.innerHTML = `<span>${texto}</span><svg class="ic"><use href="#i-cambiar"/></svg>`; };
   if (tipoDoc !== 'paciente') { poner('Documento'); return; }
   poner('Paciente');
   const pag = paginas[0];
