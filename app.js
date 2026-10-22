@@ -1,4 +1,4 @@
-const VERSION = '1.8.1';
+const VERSION = '2.0';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -229,18 +229,18 @@ function borrarRespaldo() {
   }).catch(err => console.error(err));
 }
 
-// ---------- 2. Tipo de documento: normal o paciente ----------
+// ---------- 2. Tipo de documento: normal o paciente (etiqueta de la cabecera) ----------
 function marcarTipo() {
-  document.querySelectorAll('.tipo').forEach(b =>
-    b.classList.toggle('activo', b.dataset.tipo === tipoDoc));
+  document.body.classList.toggle('modoPaciente', tipoDoc === 'paciente');
+  actualizarCabecera();
 }
-document.querySelectorAll('.tipo').forEach(boton => {
-  boton.addEventListener('click', () => {
-    tipoDoc = boton.dataset.tipo;
-    localStorage.setItem('tipoDoc', tipoDoc);
-    marcarTipo();
-    if (tipoDoc === 'paciente' && paginas.length) leerPagina(paginas[0]);
-  });
+document.getElementById('modoBtn').addEventListener('click', () => {
+  tipoDoc = tipoDoc === 'paciente' ? 'normal' : 'paciente';
+  localStorage.setItem('tipoDoc', tipoDoc);
+  marcarTipo();
+  estado.textContent = tipoDoc === 'paciente'
+    ? '🧪 Modo Paciente: se leerá la cédula'
+    : '📄 Modo Documento normal';
 });
 marcarTipo();
 
@@ -1139,25 +1139,21 @@ function mostrarPaginas() {
   const contenedor = document.getElementById('paginas');
   contenedor.innerHTML = '';
   paginas.forEach((pag, i) => {
-    contenedor.innerHTML += `
-      <div class="pagina">
-        <img src="${pag.finalURL}" onclick="editarPagina(${i})" title="Toca para ajustar el recorte">
-        <span>${i + 1} · ${pag.formato || ''}</span>
-        <button class="borrar" onclick="borrarPagina(${i})">✕</button>
-        <div class="mover">
-          <button onclick="moverPagina(${i}, -1)" ${i === 0 ? 'disabled' : ''}>◀</button>
-          <button onclick="rotarPagina(${i})" style="width:auto; padding:0 10px;">⟳ Girar</button>
-          <button onclick="moverPagina(${i}, 1)" ${i === paginas.length - 1 ? 'disabled' : ''}>▶</button>
-        </div>
-      </div>`;
+    const d = document.createElement('div');
+    d.className = 'pagina';
+    d.innerHTML = `<img src="${pag.finalURL}" alt="Página ${i + 1}"><span>${i + 1}</span>` +
+      (pag.formato ? `<small>${pag.formato}</small>` : '');
+    d.onclick = () => abrirMenuPagina(i);
+    contenedor.appendChild(d);
   });
-  const btnPdf = document.getElementById('pdf');
-  btnPdf.disabled = paginas.length === 0;
-  btnPdf.textContent = paginas.length
-    ? `💾 Guardar PDF (${paginas.length} ${paginas.length === 1 ? 'página' : 'páginas'})`
-    : '💾 Guardar PDF';
-  document.getElementById('textoBtn').style.display = paginas.length ? 'block' : 'none';
-  document.getElementById('nuevo').style.display = paginas.length ? 'block' : 'none';
+  const n = paginas.length;
+  document.getElementById('vacio').style.display = n ? 'none' : 'block';
+  document.getElementById('ayudaPaginas').style.display = n ? 'block' : 'none';
+  document.getElementById('pdf').disabled = n === 0;
+  document.getElementById('pdfCuenta').textContent = n ? `(${n})` : '';
+  document.getElementById('textoBtn').disabled = n === 0;
+  document.getElementById('nuevo').disabled = n === 0;
+  actualizarCabecera();
 }
 
 function moverPagina(i, direccion) {
@@ -2562,7 +2558,75 @@ function cerrarTexto() {
   respaldarSesion();
 }
 porId('txCerrar').onclick = cerrarTexto;
+// ---------- 15b. Diseño 2.0: cabecera, menús y avisos flotantes ----------
+const iconoCambiar = '<svg class="ic"><use href="#i-cambiar"/></svg>';
 
+// Cabecera: muestra el modo y, en Paciente, la cédula leída de la primera página
+function actualizarCabecera() {
+  const btn = document.getElementById('modoBtn');
+  const poner = texto => { btn.innerHTML = `<span>${texto}</span>${iconoCambiar}`; };
+  if (tipoDoc !== 'paciente') { poner('Documento'); return; }
+  poner('Paciente');
+  const pag = paginas[0];
+  if (!pag) return;
+  leerPagina(pag).then(d => {
+    if (tipoDoc === 'paciente' && paginas[0] === pag && d.cedula) {
+      poner(`Paciente · ${formatoCedula(d.cedula)}`);
+    }
+  });
+}
+
+// Menú de una página: aparece al tocar una miniatura
+const hoja = document.getElementById('hoja');
+let paginaMenu = -1;
+function abrirMenuPagina(i) {
+  paginaMenu = i;
+  document.getElementById('hojaTitulo').textContent = `Página ${i + 1} de ${paginas.length}`;
+  hoja.querySelector('[data-accion="antes"]').disabled = i === 0;
+  hoja.querySelector('[data-accion="despues"]').disabled = i === paginas.length - 1;
+  hoja.querySelector('[data-accion="recorte"]').disabled = !opencvListo;
+  hoja.classList.add('visible');
+}
+hoja.addEventListener('click', e => {
+  const boton = e.target.closest('button[data-accion]');
+  if (e.target !== hoja && !boton) return;
+  const i = paginaMenu;
+  hoja.classList.remove('visible');
+  paginaMenu = -1;
+  if (!boton || i < 0 || !paginas[i]) return;
+  const accion = boton.dataset.accion;
+  if (accion === 'recorte') editarPagina(i);
+  if (accion === 'girar') rotarPagina(i);
+  if (accion === 'antes') moverPagina(i, -1);
+  if (accion === 'despues') moverPagina(i, 1);
+  if (accion === 'borrar' && confirm(`¿Borrar la página ${i + 1}?`)) borrarPagina(i);
+});
+
+// Menú "Más": Empezar de nuevo, Reportar problema y versión
+const menuMas = document.getElementById('menuMas');
+document.getElementById('masBtn').addEventListener('click', () => menuMas.classList.add('visible'));
+menuMas.addEventListener('click', e => {
+  if (e.target === menuMas || e.target.closest('button')) menuMas.classList.remove('visible');
+});
+
+// Avisos flotantes: toman el mensaje de #estado, le quitan el emoji del inicio
+// y lo muestran con un icono propio (los importantes duran más)
+const aviso = document.getElementById('aviso');
+let temporizadorAviso = null;
+new MutationObserver(() => {
+  const original = estado.textContent.trim();
+  if (!original) return;
+  const importante = /^(⚠|❌|🔒|✋)/u.test(original);
+  document.getElementById('avisoTexto').textContent = original.replace(/^[^\p{L}\p{N}¿¡]+/u, '');
+  document.getElementById('avisoIcono').setAttribute('href', importante ? '#i-alerta' : '#i-ok');
+  aviso.classList.toggle('alerta', importante);
+  aviso.classList.add('visible');
+  clearTimeout(temporizadorAviso);
+  temporizadorAviso = setTimeout(() => aviso.classList.remove('visible'), importante ? 7000 : 3500);
+}).observe(estado, { childList: true, characterData: true, subtree: true });
+aviso.addEventListener('click', () => aviso.classList.remove('visible'));
+mostrarPaginas(); // dibuja la pantalla vacía al abrir
+ 
 // ---------- 16. Recuperar el trabajo al volver a la app ----------
 async function recuperarTrabajo() {
   let sesion, registros;

@@ -4,46 +4,105 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
-  <link rel="stylesheet" href="estilos.css?v=1.8.1">
+  <link rel="stylesheet" href="estilos.css?v=2.0">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
   <script async src="libs/opencv.js"></script>
 </head>
 <body>
-  <h1>📄 Escáner</h1>
-  <p id="estado">⏳ Cargando...</p>
+  <!-- Iconos de línea (dibujados aquí: funcionan sin internet) -->
+  <svg style="display:none" aria-hidden="true">
+    <symbol id="i-camara" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></symbol>
+    <symbol id="i-texto" viewBox="0 0 24 24"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></symbol>
+    <symbol id="i-galeria" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-cambiar" viewBox="0 0 24 24"><path d="M7 7h12l-3-3"/><path d="M17 17H5l3 3"/></symbol>
+    <symbol id="i-recorte" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
+    <symbol id="i-girar" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+    <symbol id="i-izq" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+    <symbol id="i-der" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-borrar" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></symbol>
+    <symbol id="i-reporte" viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4.5L17 13H5"/></symbol>
+    <symbol id="i-escanear" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
+    <symbol id="i-alerta" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></symbol>
+  </svg>
 
-  <!-- Tipo de documento -->
-  <div class="tipos">
-    <button class="tipo activo" data-tipo="normal">📄 Documento normal</button>
-    <button class="tipo" data-tipo="paciente">🧪 Paciente (lee cédula)</button>
+  <!-- Cabecera: nombre y modo (tocar para cambiar) -->
+  <header class="cabecera">
+    <h1>Escáner</h1>
+    <button id="modoBtn">Documento</button>
+  </header>
+
+  <!-- Aviso flotante: app.js escribe en #estado y se muestra en #aviso -->
+  <p id="estado"></p>
+  <div id="aviso"><svg class="ic"><use id="avisoIcono" href="#i-ok"/></svg><span id="avisoTexto"></span></div>
+
+  <main>
+    <div class="modos">
+      <button class="modo activo" data-modo="color">Color</button>
+      <button class="modo" data-modo="bn">B/N</button>
+      <button class="modo" data-modo="original">Original</button>
+    </div>
+
+    <!-- Se ve cuando no hay páginas -->
+    <div id="vacio">
+      <svg class="ic vacioIcono"><use href="#i-escanear"/></svg>
+      <p class="vacioTitulo">Toca la cámara para escanear</p>
+      <p class="vacioAyuda">Consejo: pon la hoja sobre un fondo oscuro para que el recorte salga mejor.</p>
+    </div>
+
+    <div id="paginas"></div>
+    <p id="ayudaPaginas">Toca una página para ajustarla</p>
+  </main>
+
+  <!-- Barra de abajo -->
+  <nav class="barra">
+    <button class="barraBtn" id="pdf" disabled>
+      <svg class="ic"><use href="#i-pdf"/></svg><span>PDF <span id="pdfCuenta"></span></span>
+    </button>
+    <button class="barraBtn" id="textoBtn" disabled>
+      <svg class="ic"><use href="#i-texto"/></svg><span>Texto</span>
+    </button>
+    <label class="camara" aria-label="Escanear">
+      <svg class="ic"><use href="#i-camara"/></svg>
+      <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
+    </label>
+    <label class="barraBtn">
+      <svg class="ic"><use href="#i-galeria"/></svg><span>Galería</span>
+      <input type="file" accept="image/*" class="entradaFoto" hidden>
+    </label>
+    <button class="barraBtn" id="masBtn">
+      <svg class="ic"><use href="#i-menu"/></svg><span>Más</span>
+    </button>
+  </nav>
+
+  <!-- Menú de una página (al tocar una miniatura) -->
+  <div id="hoja" class="capaHoja">
+    <div class="hojaCaja">
+      <p id="hojaTitulo">Página</p>
+      <button data-accion="recorte"><svg class="ic"><use href="#i-recorte"/></svg>Ajustar recorte</button>
+      <button data-accion="girar"><svg class="ic"><use href="#i-girar"/></svg>Girar</button>
+      <div class="hojaFila">
+        <button data-accion="antes"><svg class="ic"><use href="#i-izq"/></svg>Mover antes</button>
+        <button data-accion="despues">Mover después<svg class="ic"><use href="#i-der"/></svg></button>
+      </div>
+      <button data-accion="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar página</button>
+      <button data-accion="cerrar" class="cerrarHoja">Cancelar</button>
+    </div>
   </div>
 
-  <!-- Escanear con la cámara del celular, o usar una foto de la galería -->
-  <label class="boton" id="btnEscanear">
-    📷 Escanear
-    <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
-  </label>
-  <label class="botonSec">
-    🖼️ Usar foto de la galería
-    <input type="file" accept="image/*" class="entradaFoto" hidden>
-  </label>
-
-  <div class="modos">
-    <button class="modo activo" data-modo="color">🎨 Color</button>
-    <button class="modo" data-modo="bn">⚫ B/N</button>
-    <button class="modo" data-modo="original">📷 Original</button>
+  <!-- Menú "Más" -->
+  <div id="menuMas" class="capaHoja">
+    <div class="hojaCaja">
+      <button id="nuevo" class="peligro" disabled><svg class="ic"><use href="#i-borrar"/></svg>Empezar de nuevo</button>
+      <button id="reportar"><svg class="ic"><use href="#i-reporte"/></svg>Reportar problema</button>
+      <button class="cerrarHoja">Cerrar</button>
+      <p id="version"></p>
+    </div>
   </div>
-
-  <div id="paginas"></div>
-
-  <button class="boton" id="pdf" disabled>💾 Guardar PDF</button>
-  <button class="boton" id="textoBtn">🔤 Extraer texto</button>
-  <button class="boton" id="nuevo">🗑️ Empezar de nuevo</button>
-
-  <p id="version"></p>
-  <a href="#" class="botonSec" id="reportar">🐞 Reportar problema</a>
 
   <!-- Editor de esquinas y lados (se abre después de cada foto) -->
   <div id="editor">
@@ -51,14 +110,14 @@
     <p id="edAyuda">Arrastra las esquinas o cualquier lado del recuadro azul</p>
     <canvas id="lienzo"></canvas>
     <div class="filaEd">
-      <button id="edCancelar">✕ Cancelar</button>
-      <button id="edOpcion">🔄 Otra opción</button>
-      <button id="edTodo">⬜ Toda</button>
+      <button id="edCancelar">Cancelar</button>
+      <button id="edOpcion">Otra opción</button>
+      <button id="edTodo">Toda</button>
     </div>
     <div class="filaEd">
-      <button id="edListo">✓ Listo</button>
+      <button id="edListo">Listo</button>
       <label id="edOtra">
-        📷 Listo y otra
+        Listo y otra
         <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
       </label>
     </div>
@@ -67,24 +126,24 @@
   <!-- Ventana para guardar -->
   <div id="dialogo">
     <div class="caja">
-      <h2>💾 Guardar documento</h2>
+      <h2>Guardar documento</h2>
 
       <!-- Todo en un PDF o un PDF por foto (solo si hay varias fotos) -->
       <div class="formas" id="formas">
-        <button class="forma" data-forma="uno">📄 Todo en un PDF</button>
-        <button class="forma" data-forma="varios">📑 Un PDF por foto</button>
+        <button class="forma" data-forma="uno">Todo en un PDF</button>
+        <button class="forma" data-forma="varios">Un PDF por foto</button>
       </div>
 
       <p id="dlgLectura"></p>
       <div id="dlgCampos"></div>
-      <p class="aviso" id="dlgAviso">⚠️ Revisa que cada cédula coincida con su documento</p>
+      <p class="aviso" id="dlgAviso">Revisa que cada cédula coincida con su documento</p>
       <p id="dlgArchivo"></p>
 
       <div class="filaDlg">
         <button id="dlgCancelar">Cancelar</button>
-        <button id="dlgGuardar">💾 Guardar</button>
+        <button id="dlgGuardar">Guardar</button>
       </div>
-      <button id="dlgCompartir">📤 Compartir</button>
+      <button id="dlgCompartir">Compartir</button>
     </div>
   </div>
 
@@ -92,7 +151,7 @@
   <div id="textoDlg">
     <div class="txCabecera">
       <button id="txCerrar" aria-label="Cerrar">✕</button>
-      <span id="txTitulo">🔤 Extraer texto</span>
+      <span id="txTitulo">Extraer texto</span>
     </div>
 
     <!-- Paso 1: elegir qué páginas leer -->
@@ -103,14 +162,14 @@
         <button id="txNinguna">Ninguna</button>
       </div>
       <div id="txMiniaturas"></div>
-      <button class="boton" id="txLeer">🔍 Leer</button>
+      <button class="boton" id="txLeer">Leer</button>
     </div>
 
     <!-- Paso 2: leyendo -->
     <div id="txLeyendo">
       <p id="txProgresoTexto">Leyendo...</p>
       <div class="txBarra"><div id="txBarraRelleno"></div></div>
-      <button id="txDetener">⏹ Detener</button>
+      <button id="txDetener">Detener</button>
     </div>
 
     <!-- Paso 3: revisar texto con la foto -->
@@ -132,10 +191,10 @@
         </div>
       </div>
       <div class="txPie">
-        <button id="txCopiar">📋 Copiar</button>
-        <button id="txWord">📝 Word</button>
-        <button id="txCompartir">📤 Texto</button>
-        <button id="txOtras">📄 Leer otras páginas</button>
+        <button id="txCopiar">Copiar</button>
+        <button id="txWord">Word</button>
+        <button id="txCompartir">Texto</button>
+        <button id="txOtras">Leer otras páginas</button>
       </div>
     </div>
   </div>
@@ -143,25 +202,25 @@
   <!-- Ventana para reportar un problema -->
   <div id="reporteDlg">
     <div class="caja">
-      <h2>🐞 Reportar problema</h2>
+      <h2>Reportar problema</h2>
       <label for="repTexto">¿Qué pasó?</label>
       <textarea id="repTexto" rows="5" placeholder="Ejemplo: al tocar Compartir no pasó nada"></textarea>
       <label class="botonSec" id="repAdjuntar">
-        <span id="repAdjuntarTexto">📎 Adjuntar capturas de pantalla (hasta 4, opcional)</span>
+        <span id="repAdjuntarTexto">Adjuntar capturas de pantalla (hasta 4, opcional)</span>
         <input type="file" accept="image/*" id="repFoto" multiple hidden>
       </label>
       <p id="repFotoNombre"></p>
-      <a href="#" class="botonSec" id="repQuitar" style="display:none">✕ Quitar capturas</a>
-      <p class="aviso">⚠️ Adjunta solo capturas de la pantalla de la app.</p>
+      <a href="#" class="botonSec" id="repQuitar" style="display:none">Quitar capturas</a>
+      <p class="aviso">Adjunta solo capturas de la pantalla de la app.</p>
       <div class="filaDlg">
         <button id="repCancelar">Cancelar</button>
-        <button id="repEnviar">📤 Enviar</button>
+        <button id="repEnviar">Enviar</button>
       </div>
     </div>
   </div>
 
-  <div id="cargando"><div>⏳ Procesando...</div></div>
+  <div id="cargando"><div>Procesando...</div></div>
 
-  <script src="app.js?v=1.8.1"></script>
+  <script src="app.js?v=2.0"></script>
 </body>
 </html>

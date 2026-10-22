@@ -1,53 +1,113 @@
-body { font-family: sans-serif; margin: 0; padding: 16px; background: #f2f4f7; text-align: center; }
-h1 { color: #1a3d6d; margin-bottom: 4px; }
-#estado { color: #555; min-height: 22px; margin: 6px 0 12px; }
-#version { color: #999; font-size: 12px; margin-top: 20px; }
+/* ---------- Colores generales (el color del modo cambia en Paciente) ---------- */
+:root { --azul: #1a73e8; --marino: #1a3d6d; --modo: #1a3d6d; --fondo: #f2f4f7; }
+body.modoPaciente { --modo: #0f6e56; }
+* { -webkit-tap-highlight-color: transparent; }
+body { font-family: sans-serif; margin: 0; background: var(--fondo); color: #1f2937;
+       padding-bottom: 110px; }
+button { font-family: inherit; cursor: pointer; }
 
+/* ---------- Iconos de línea ---------- */
+.ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8;
+      stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+/* ---------- Cabecera ---------- */
+.cabecera { position: sticky; top: 0; z-index: 15; display: flex; align-items: center; gap: 10px;
+            padding: 12px 16px; background: var(--modo); color: white; transition: background 0.3s; }
+.cabecera h1 { margin: 0; font-size: 20px; flex: 1; letter-spacing: 0.2px; }
+#modoBtn { display: flex; align-items: center; gap: 6px; border: none; border-radius: 20px;
+           padding: 8px 12px 8px 14px; font-size: 14px; min-height: 40px; background: #ffffff2e;
+           color: white; max-width: 70%; white-space: nowrap; overflow: hidden; }
+#modoBtn span { overflow: hidden; text-overflow: ellipsis; }
+#modoBtn .ic { width: 18px; height: 18px; }
+
+/* ---------- Aviso flotante ---------- */
+#estado { display: none; }
+#aviso { position: fixed; left: 50%; top: 72px; transform: translate(-50%, -10px);
+         display: flex; align-items: center; gap: 10px; width: max-content;
+         max-width: calc(100% - 32px); box-sizing: border-box; padding: 10px 16px;
+         border-radius: 12px; background: #202124; color: white; font-size: 14px;
+         opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s; z-index: 45; }
+#aviso.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+#aviso .ic { width: 20px; height: 20px; color: #81c995; }
+#aviso.alerta .ic { color: #fdd663; }
+
+main { padding: 14px 16px 0; text-align: center; }
+
+/* ---------- Filtros ---------- */
+.modos { display: flex; gap: 4px; padding: 4px; margin: 0 0 14px; background: #e3e6eb;
+         border-radius: 12px; }
+.modo { flex: 1; border: none; background: transparent; padding: 10px 4px; min-height: 44px;
+        font-size: 15px; color: #555; border-radius: 9px; }
+.modo.activo { background: white; color: var(--marino); font-weight: bold; box-shadow: 0 1px 3px #0002; }
+
+/* ---------- Pantalla vacía ---------- */
+#vacio { padding: 50px 20px; }
+.vacioIcono { width: 64px; height: 64px; stroke-width: 1.4; color: var(--modo); }
+.vacioTitulo { font-size: 18px; font-weight: bold; color: var(--marino); margin: 10px 0 6px; }
+.vacioAyuda { font-size: 14px; color: #777; margin: 0; }
+
+/* ---------- Miniaturas ---------- */
+#paginas { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+@media (min-width: 600px) { #paginas { grid-template-columns: repeat(3, 1fr); } }
+.pagina { position: relative; background: white; border-radius: 12px; padding: 6px;
+          box-shadow: 0 1px 4px #0002; cursor: pointer; }
+.pagina img { width: 100%; display: block; border-radius: 8px; }
+.pagina span { position: absolute; top: 10px; left: 10px; background: #000b; color: white;
+               padding: 2px 8px; border-radius: 6px; font-size: 13px; }
+.pagina small { display: block; margin-top: 4px; font-size: 12px; color: #777; }
+#ayudaPaginas { color: #777; font-size: 13px; margin: 12px 0; }
+
+/* ---------- Barra de abajo ---------- */
+.barra { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid;
+         grid-template-columns: repeat(5, 1fr); align-items: end; background: white;
+         border-top: 1px solid #e3e6eb; padding: 6px 4px calc(8px + env(safe-area-inset-bottom)); }
+.barraBtn { display: flex; flex-direction: column; align-items: center; gap: 3px; border: none;
+            background: none; font-size: 12px; color: #555; padding: 6px 2px; min-height: 48px; }
+.barraBtn .ic { width: 24px; height: 24px; }
+.barraBtn:disabled { opacity: 0.35; }
+#pdf { color: #188038; font-weight: bold; }
+#textoBtn { color: #5e35b1; }
+.camara { justify-self: center; width: 66px; height: 66px; margin-top: -34px; border-radius: 50%;
+          background: var(--modo); color: white; display: flex; align-items: center;
+          justify-content: center; border: 4px solid var(--fondo);
+          box-shadow: 0 3px 10px #0004; cursor: pointer; transition: background 0.3s; }
+.camara .ic { width: 30px; height: 30px; stroke-width: 2; }
+
+/* ---------- Menús que suben desde abajo ---------- */
+.capaHoja { display: none; position: fixed; inset: 0; background: #0007; z-index: 30;
+            align-items: flex-end; justify-content: center; }
+.capaHoja.visible { display: flex; }
+.hojaCaja { background: white; width: 100%; max-width: 480px; box-sizing: border-box;
+            border-radius: 18px 18px 0 0; padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+            display: flex; flex-direction: column; gap: 8px; }
+.hojaCaja p { margin: 0 0 4px; text-align: center; color: #777; font-size: 14px; }
+.hojaCaja button { display: flex; align-items: center; gap: 12px; padding: 14px; min-height: 48px;
+                   font-size: 16px; border: none; border-radius: 12px; background: var(--fondo);
+                   color: #1f2937; text-align: left; }
+.hojaCaja button:disabled { opacity: 0.4; }
+.hojaFila { display: flex; gap: 8px; }
+.hojaFila button { flex: 1; justify-content: center; gap: 6px; }
+.hojaCaja .peligro { color: #d93025; }
+.hojaCaja .cerrarHoja { background: none; justify-content: center; color: #555; }
+#version { color: #999; font-size: 12px; margin-top: 4px; }
+
+/* ---------- Botones generales (los usan otras ventanas) ---------- */
 .boton { display: block; width: 100%; box-sizing: border-box; padding: 16px; margin: 10px 0;
-         font-size: 18px; border: none; border-radius: 12px; background: #1a73e8;
+         font-size: 18px; border: none; border-radius: 12px; background: var(--azul);
          color: white; cursor: pointer; }
 .boton:disabled { background: #aaa !important; }
-.botonSec { display: block; padding: 10px; margin: 0 0 10px; color: #1a73e8;
+.botonSec { display: block; padding: 10px; margin: 0 0 10px; color: var(--azul);
             font-size: 15px; text-decoration: underline; cursor: pointer; }
-#pdf { background: #188038; }
-#textoBtn { display: none; background: #5e35b1; }
-#nuevo { display: none; background: white; color: #d93025; border: 2px solid #d93025; font-size: 16px; }
-
-/* Tipo de documento */
-.tipos { display: flex; gap: 8px; margin: 4px 0 10px; }
-.tipo { flex: 1; padding: 12px 4px; font-size: 15px; border: 2px solid #1a3d6d;
-        background: white; color: #1a3d6d; border-radius: 10px; }
-.tipo.activo { background: #1a3d6d; color: white; }
-
-/* Modos de color */
-.modos { display: flex; gap: 8px; margin: 10px 0; }
-.modo { flex: 1; padding: 12px 4px; font-size: 15px; border: 2px solid #1a73e8;
-        background: white; color: #1a73e8; border-radius: 10px; }
-.modo.activo { background: #1a73e8; color: white; }
-
-/* Miniaturas de páginas */
-#paginas { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 16px 0; }
-.pagina { position: relative; width: 45%; }
-.pagina img { width: 100%; border-radius: 8px; box-shadow: 0 2px 6px #0003; cursor: pointer; }
-.pagina span { position: absolute; top: 6px; left: 6px; background: #000a; color: white;
-               padding: 2px 8px; border-radius: 6px; font-size: 13px; }
-.borrar { position: absolute; top: 4px; right: 4px; background: #d93025; color: white;
-          border: none; border-radius: 50%; width: 30px; height: 30px; font-size: 16px; }
-.mover { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
-.mover small { color: #777; }
-.mover button { width: 38px; height: 32px; border: 2px solid #1a73e8; background: white;
-                color: #1a73e8; border-radius: 8px; font-size: 14px; }
-.mover button:disabled { opacity: 0.3; }
 
 #cargando { display: none; position: fixed; inset: 0; background: #0007;
             align-items: center; justify-content: center; z-index: 40; }
 #cargando.visible { display: flex; }
 #cargando div { background: white; padding: 20px 30px; border-radius: 12px; font-size: 18px; }
 
-/* Editor de esquinas y lados */
+/* ---------- Editor de esquinas y lados ---------- */
 #editor { display: none; position: fixed; inset: 0; background: #111; z-index: 24;
           flex-direction: column; align-items: center; justify-content: center;
-          padding: 10px; box-sizing: border-box; }
+          padding: 10px; box-sizing: border-box; text-align: center; }
 #editor.visible { display: flex; }
 #edMensaje { color: white; margin: 0 0 4px; font-size: 16px; }
 #edMensaje.alerta { color: #fbbc04; font-weight: bold; }
@@ -61,16 +121,16 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #edOpcion { background: #7b1fa2; }
 #edTodo { background: #555; }
 #edListo { background: #188038; }
-#edOtra { background: #1a73e8; }
+#edOtra { background: var(--azul); }
 
-/* Ventana de guardar */
+/* ---------- Ventana de guardar ---------- */
 #dialogo { display: none; position: fixed; inset: 0; background: #0009; z-index: 26;
            align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
 #dialogo.visible { display: flex; }
 #dialogo .caja { background: white; border-radius: 16px; padding: 18px; width: 100%;
                  max-width: 460px; max-height: 92vh; overflow-y: auto; text-align: left;
                  box-sizing: border-box; }
-#dialogo h2 { margin: 0 0 10px; color: #1a3d6d; font-size: 20px; }
+#dialogo h2 { margin: 0 0 10px; color: var(--marino); font-size: 20px; }
 
 .formas { display: flex; gap: 8px; margin-bottom: 12px; }
 .forma { flex: 1; padding: 12px 4px; font-size: 14px; border: 2px solid #188038;
@@ -81,8 +141,8 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
 #dlgCampos label { display: block; margin: 10px 0 2px; font-weight: bold; color: #333; font-size: 14px; }
 #dlgCampos input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 11px;
                    font-size: 17px; font-weight: normal; border: 2px solid #ccc; border-radius: 10px; }
-#dlgCampos input:focus { border-color: #1a73e8; outline: none; }
-.cedulaGrande { font-size: 24px; font-weight: bold; color: #1a3d6d; letter-spacing: 1px;
+#dlgCampos input:focus { border-color: var(--azul); outline: none; }
+.cedulaGrande { font-size: 24px; font-weight: bold; color: var(--marino); letter-spacing: 1px;
                 margin-top: 4px; min-height: 0; }
 
 /* Un PDF por foto: una fila por cada foto */
@@ -99,33 +159,33 @@ h1 { color: #1a3d6d; margin-bottom: 4px; }
                                  border-radius: 10px; color: white; }
 #dlgCancelar { background: #777; }
 #dlgGuardar { background: #188038; }
-#dlgCompartir { display: block; width: 100%; margin-top: 8px; background: #1a73e8; }
+#dlgCompartir { display: block; width: 100%; margin-top: 8px; background: var(--azul); }
 #dialogo button:disabled { background: #bbb; color: white; }
 
-/* Ventana de reportar problema */
+/* ---------- Ventana de reportar problema ---------- */
 #reporteDlg { display: none; position: fixed; inset: 0; background: #0009; z-index: 29;
               align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
 #reporteDlg.visible { display: flex; }
 #reporteDlg .caja { background: white; border-radius: 16px; padding: 18px; width: 100%;
                     max-width: 460px; text-align: left; box-sizing: border-box; }
-#reporteDlg h2 { margin: 0 0 10px; color: #1a3d6d; font-size: 20px; }
+#reporteDlg h2 { margin: 0 0 10px; color: var(--marino); font-size: 20px; }
 #reporteDlg label[for] { display: block; font-weight: bold; color: #333; margin-bottom: 6px; }
 #reporteDlg textarea { width: 100%; box-sizing: border-box; padding: 11px; font-size: 16px;
                        font-family: inherit; border: 2px solid #ccc; border-radius: 10px; }
-#reporteDlg textarea:focus { border-color: #1a73e8; outline: none; }
+#reporteDlg textarea:focus { border-color: var(--azul); outline: none; }
 #repFotoNombre { font-size: 13px; color: #555; margin: 0 0 8px; word-break: break-all; }
 #repCancelar { background: #777; }
-#repEnviar { background: #1a73e8; }
+#repEnviar { background: var(--azul); }
 
-/* Imagen a texto */
-#textoDlg { display: none; position: fixed; inset: 0; background: #f2f4f7; z-index: 28;
+/* ---------- Imagen a texto ---------- */
+#textoDlg { display: none; position: fixed; inset: 0; background: var(--fondo); z-index: 28;
             flex-direction: column; text-align: left; }
 #textoDlg.visible { display: flex; }
 .txCabecera { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
               background: white; border-bottom: 1px solid #ddd; }
 .txCabecera button { border: none; background: #eee; border-radius: 8px; width: 40px;
                      height: 40px; font-size: 18px; }
-#txTitulo { font-weight: bold; color: #1a3d6d; font-size: 17px; flex: 1; }
+#txTitulo { font-weight: bold; color: var(--marino); font-size: 17px; flex: 1; }
 #txElegir, #txLeyendo, #txRevisar { display: none; flex: 1; flex-direction: column;
                                     min-height: 0; padding: 12px; box-sizing: border-box; }
 #txElegir.activo, #txLeyendo.activo, #txRevisar.activo { display: flex; }
