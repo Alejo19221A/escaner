@@ -351,3 +351,9 @@ body.seleccionando .barra { display: none; }
                    padding: 10px 14px; min-height: 44px; font-size: 15px; background: var(--fondo); color: #1f2937; }
 #barraSel #selCancelar { padding: 10px; }
 #barraSel .peligro { background: #fce8e6; color: #d93025; }
+
+/* ---------- Foto borrosa (2.3.1) ---------- */
+.marcaBorrosa { position: absolute; top: 38px; left: 10px; display: flex; align-items: center; gap: 4px;
+                background: #fbbc04; color: #202124; font-size: 12px; font-weight: bold;
+                padding: 2px 8px 2px 6px; border-radius: 6px; }
+.marcaBorrosa .ic { width: 14px; height: 14px; stroke-width: 2.4; }

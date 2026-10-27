@@ -1,4 +1,4 @@
-const VERSION = '2.3';
+const VERSION = '2.3.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -64,7 +64,7 @@ setTimeout(() => {
 }, 30000);
 
 // ---------- Ayudantes ----------
-function aBlob(canvas, calidad = 0.92) {
+function aBlob(canvas, calidad = 0.95) {
     return new Promise(r => canvas.toBlob(r, 'image/jpeg', calidad));
 }
 async function aCanvas(blob) {
@@ -256,129 +256,140 @@ function enCola(tarea) {
 // Varias fotos de la galería: se agregan solas con el recorte automático (máximo 20 por vez);
 // después se puede tocar cada una para ajustar el recorte
 document.querySelectorAll('.entradaFoto').forEach(entrada => {
-  entrada.addEventListener('change', (e) => {
-    let archivos = [...e.target.files];
-    e.target.value = '';
-    if (!archivos.length) return;
-    if (archivos.length > 20) {
-      alert('Se pueden elegir hasta 20 fotos a la vez. Se tomarán las primeras 20.');
-      archivos = archivos.slice(0, 20);
-    }
-    const deGaleria = !entrada.hasAttribute('capture'); // la galería no tiene "capture"
-    if (archivos.length === 1) {
-      enCola(() => manejarFoto(archivos[0], deGaleria));
-      return;
-    }
-    const total = archivos.length;
-    archivos.forEach((archivo, i) =>
-      enCola(() => manejarFoto(archivo, deGaleria, { numero: i + 1, total })));
-    enCola(async () => {
-      estado.textContent = `✅ Se agregaron ${total} fotos. Toca una para ajustar el recorte`;
+    entrada.addEventListener('change', (e) => {
+        let archivos = [...e.target.files];
+        e.target.value = '';
+        if (!archivos.length) return;
+        if (archivos.length > 20) {
+            alert('Se pueden elegir hasta 20 fotos a la vez. Se tomarán las primeras 20.');
+            archivos = archivos.slice(0, 20);
+        }
+        const deGaleria = !entrada.hasAttribute('capture'); // la galería no tiene "capture"
+        if (archivos.length === 1) {
+            enCola(() => manejarFoto(archivos[0], deGaleria));
+            return;
+        }
+        const total = archivos.length;
+        const resumen = { borrosas: 0 }; // cuántas salieron borrosas (2.3.1)
+        archivos.forEach((archivo, i) =>
+            enCola(() => manejarFoto(archivo, deGaleria, { numero: i + 1, total, resumen })));
+        enCola(async () => {
+            const b = resumen.borrosas;
+            estado.textContent = b
+                ? `⚠️ Se agregaron ${total} fotos. ${b === 1 ? '1 salió borrosa' : b + ' salieron borrosas'}: revisa las marcadas en amarillo`
+                : `✅ Se agregaron ${total} fotos. Toca una para ajustar el recorte`;
+        });
     });
-  });
 });
 
 // ¿Es una captura de pantalla? (ya viene derecha: no hay que buscar la hoja ni enderezarla)
 function pareceCaptura(archivo, base) {
-  const nombre = (archivo.name || '').toLowerCase();
-  if (/screenshot|captura|pantallazo|screen/.test(nombre)) return true;
-  if (archivo.type === 'image/png') return true;
-  const proporcion = Math.max(base.width, base.height) / Math.min(base.width, base.height);
-  return proporcion >= 1.9; // pantalla de celular: mucho más alargada que una foto
+    const nombre = (archivo.name || '').toLowerCase();
+    if (/screenshot|captura|pantallazo|screen/.test(nombre)) return true;
+    if (archivo.type === 'image/png') return true;
+    const proporcion = Math.max(base.width, base.height) / Math.min(base.width, base.height);
+    return proporcion >= 1.9; // pantalla de celular: mucho más alargada que una foto
 }
 
 // lote: si vienen varias fotos a la vez ({ numero, total }), se agregan solas, sin abrir el editor
 async function manejarFoto(archivo, deGaleria = false, lote = null) {
-  const textoCargando = document.querySelector('#cargando div');
-  if (lote) textoCargando.textContent = `Procesando foto ${lote.numero} de ${lote.total}...`;
-  await mostrarCargando(true);
-  let base = null;
-  try {
-    const img = await cargarImagen(archivo);
-    base = copiaReducida(img, 3000).canvas; // 3000 px alcanzan para 200 DPI
-    URL.revokeObjectURL(img.src);
+    const textoCargando = document.querySelector('#cargando div');
+    if (lote) textoCargando.textContent = `Procesando foto ${lote.numero} de ${lote.total}...`;
+    await mostrarCargando(true);
+    let base = null;
+    try {
+        const img = await cargarImagen(archivo);
+        base = copiaReducida(img, 3000).canvas; // 3000 px alcanzan para 200 DPI
+        URL.revokeObjectURL(img.src);
 
-    if (!opencvListo) { // plan B: sin recorte
-      await agregarPagina(base, null);
-      return;
-    }
+        if (!opencvListo) { // plan B: sin recorte
+            await agregarPagina(base, null);
+            return;
+        }
 
-    const esCaptura = deGaleria && pareceCaptura(archivo, base);
+        const esCaptura = deGaleria && pareceCaptura(archivo, base);
 
-    // Varias fotos a la vez: recorte automático, sin abrir el editor
-    if (lote) {
-      let esquinas = esquinasCompletas(base);
-      if (!esCaptura) {
+        // Varias fotos a la vez: recorte automático, sin abrir el editor
+        if (lote) {
+            let esquinas = esquinasCompletas(base);
+            let borrosa = false;
+            if (!esCaptura) {
+                let opciones = detectarCandidatos(base);
+                if (opciones.length) opciones = refinarVarias(base, opciones);
+                if (opciones.length) esquinas = opciones[0];
+                borrosa = medirNitidez(base, esquinas) < UMBRAL_NITIDEZ; // 2.3.1: avisar si salió borrosa
+            }
+            const pagina = await agregarPagina(base, esquinas);
+            if (borrosa) {
+                pagina.borrosa = true;
+                if (lote.resumen) lote.resumen.borrosas++;
+                mostrarPaginas();
+            }
+            return;
+        }
+
+        // Captura de pantalla: se propone la imagen completa, sin deformarla
+        if (esCaptura) {
+            mostrarCargando(false);
+            const esquinas = await abrirEditor(base, [esquinasCompletas(base)],
+                'Captura de pantalla: se usa completa, sin recortar. Toca Listo', true);
+            if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
+            await mostrarCargando(true);
+            await agregarPagina(base, esquinas);
+            return;
+        }
+
+        // Hasta 3 propuestas automáticas, afinadas en los bordes
         let opciones = detectarCandidatos(base);
         if (opciones.length) opciones = refinarVarias(base, opciones);
-        if (opciones.length) esquinas = opciones[0];
-      }
-      await agregarPagina(base, esquinas);
-      return;
+        const detectada = opciones.length > 0;
+        const borrosa = detectada && medirNitidez(base, opciones[0]) < UMBRAL_NITIDEZ;
+
+        let mensaje = '✋ No encontré la hoja: ajusta el recuadro';
+        if (detectada) {
+            mensaje = opciones.length > 1
+                ? '✅ Revisa el recorte. ¿No es la hoja? Toca 🔄 Otra opción'
+                : '✅ Revisa el recorte y toca Listo';
+        }
+        if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
+
+        // Siempre se muestra el editor para confirmar
+        mostrarCargando(false);
+        const esquinas = await abrirEditor(base, detectada ? opciones : [esquinasPorDefecto(base)],
+            mensaje, true, borrosa);
+        if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
+
+        await mostrarCargando(true);
+        await agregarPagina(base, esquinas);
+    } catch (err) {
+        console.error(err);
+        estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
+    } finally {
+        liberar(base);
+        textoCargando.textContent = 'Procesando...';
+        mostrarCargando(false);
     }
-
-    // Captura de pantalla: se propone la imagen completa, sin deformarla
-    if (esCaptura) {
-      mostrarCargando(false);
-      const esquinas = await abrirEditor(base, [esquinasCompletas(base)],
-        'Captura de pantalla: se usa completa, sin recortar. Toca Listo', true);
-      if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
-      await mostrarCargando(true);
-      await agregarPagina(base, esquinas);
-      return;
-    }
-
-    // Hasta 3 propuestas automáticas, afinadas en los bordes
-    let opciones = detectarCandidatos(base);
-    if (opciones.length) opciones = refinarVarias(base, opciones);
-    const detectada = opciones.length > 0;
-    const borrosa = detectada && medirNitidez(base, opciones[0]) < UMBRAL_NITIDEZ;
-
-    let mensaje = '✋ No encontré la hoja: ajusta el recuadro';
-    if (detectada) {
-      mensaje = opciones.length > 1
-        ? '✅ Revisa el recorte. ¿No es la hoja? Toca 🔄 Otra opción'
-        : '✅ Revisa el recorte y toca Listo';
-    }
-    if (borrosa) mensaje = '⚠️ La foto salió borrosa: toca Cancelar y tómala otra vez';
-
-    // Siempre se muestra el editor para confirmar
-    mostrarCargando(false);
-    const esquinas = await abrirEditor(base, detectada ? opciones : [esquinasPorDefecto(base)],
-      mensaje, true, borrosa);
-    if (!esquinas) { estado.textContent = 'Foto descartada'; return; }
-
-    await mostrarCargando(true);
-    await agregarPagina(base, esquinas);
-  } catch (err) {
-    console.error(err);
-    estado.textContent = '❌ Hubo un error procesando la foto. Intenta de nuevo.';
-  } finally {
-    liberar(base);
-    textoCargando.textContent = 'Procesando...';
-    mostrarCargando(false);
-  }
 }
 
 // leerCedula: en modo Paciente, si se lee la cédula de esta página (al abrir un PDF, solo las 2 primeras)
 async function agregarPagina(base, esquinas, leerCedula = true) {
-  const pagina = { id: nuevoId(), baseBlob: await aBlob(base, 0.85), esquinas, giro: 0 };
-  await procesarPagina(pagina, base);
-  paginas.push(pagina);
-  if (respaldoActivo) {
-    respaldarPagina(pagina);
-    respaldarSesion();
-  } else {
-    // Después de guardar un PDF el respaldo estaba apagado: al seguir trabajando se vuelve a activar
-    respaldoActivo = true;
-    respaldarTodo();
-  }
-  estado.textContent = esquinas
-    ? `✅ Página ${paginas.length} lista (${pagina.formato})`
-    : `📄 Página ${paginas.length} lista (sin recorte)`;
-  mostrarPaginas();
-  if (tipoDoc === 'paciente' && leerCedula) leerPagina(pagina); // lee la cédula en segundo plano
-  return pagina;
+    const pagina = { id: nuevoId(), baseBlob: await aBlob(base, 0.92), esquinas, giro: 0 };
+    await procesarPagina(pagina, base);
+    paginas.push(pagina);
+    if (respaldoActivo) {
+        respaldarPagina(pagina);
+        respaldarSesion();
+    } else {
+        // Después de guardar un PDF el respaldo estaba apagado: al seguir trabajando se vuelve a activar
+        respaldoActivo = true;
+        respaldarTodo();
+    }
+    estado.textContent = esquinas
+        ? `✅ Página ${paginas.length} lista (${pagina.formato})`
+        : `📄 Página ${paginas.length} lista (sin recorte)`;
+    mostrarPaginas();
+    if (tipoDoc === 'paciente' && leerCedula) leerPagina(pagina); // lee la cédula en segundo plano
+    return pagina;
 }
 
 function cargarImagen(archivo) {
@@ -1053,7 +1064,7 @@ function enderezar(base, esquinas) {
     const M = cv.getPerspectiveTransform(origen, destino);
     const plana = new cv.Mat();
     cv.warpPerspective(src, plana, M, new cv.Size(ancho, alto),
-        cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+        cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
 
     const salida = document.createElement('canvas');
     cv.imshow(salida, plana);
@@ -1082,7 +1093,20 @@ function formatoDePagina(ancho, alto) {
         : { nombre: mejor.nombre, w: mejor.h, h: mejor.w }; // hoja acostada
 }
 
-// ---------- 8. Filtros: Color, B/N, Original ----------
+// ---------- 8. Filtros: Color, B/N, Original (2.3.1: sin sombras y más nítidos) ----------
+// Curva de contraste: lo más claro que "blanco" queda blanco puro, lo más oscuro que "negro"
+// queda negro, y "gamma" oscurece un poco los tonos medios (letras más marcadas)
+function crearCurva(negro, blanco, gamma) {
+    const curva = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+        const x = Math.min(1, Math.max(0, (v / 255 - negro) / (blanco - negro)));
+        curva[v] = Math.round(255 * Math.pow(x, gamma));
+    }
+    return curva;
+}
+const CURVA_COLOR = crearCurva(0.05, 0.92, 1.1);
+const CURVA_BN = crearCurva(0.30, 0.88, 1.6);
+
 async function aplicarModo(pag, rec) {
     // Si la página no se recortó, se reduce aquí a un tamaño razonable
     const f = formatoDePagina(rec.width, rec.height);
@@ -1091,8 +1115,8 @@ async function aplicarModo(pag, rec) {
     const ctx = c.getContext('2d');
 
     if (modo === 'color') { blanquearColor(ctx, c); afilar(c); }
-    if (modo === 'bn') { afilar(c); blancoNegro(c); }
-    const blob = await aBlob(c, 0.88);
+    if (modo === 'bn') blancoNegro(c); // ya afila por dentro
+    const blob = await aBlob(c, 0.9);
     if (pag.finalURL) URL.revokeObjectURL(pag.finalURL);
     pag.finalBlob = blob;
     pag.finalURL = URL.createObjectURL(blob);
@@ -1102,41 +1126,133 @@ async function aplicarModo(pag, rec) {
     liberar(c);
 }
 
-// Afilar: hace el texto más nítido
+// Afilar: hace el texto más nítido (ajustado para letras a 200 DPI)
 function afilar(canvas) {
     if (!opencvListo) return;
     const src = cv.imread(canvas), borroso = new cv.Mat();
-    cv.GaussianBlur(src, borroso, new cv.Size(0, 0), 2);
-    cv.addWeighted(src, 1.6, borroso, -0.6, 0, src);
+    cv.GaussianBlur(src, borroso, new cv.Size(0, 0), 1.2);
+    cv.addWeighted(src, 1.7, borroso, -0.7, 0, src);
     cv.imshow(canvas, src);
     src.delete(); borroso.delete();
 }
 
-// Color: vuelve blanco el papel y aviva los colores
-function blanquearColor(ctx, c) {
-    const datos = ctx.getImageData(0, 0, c.width, c.height);
-    const p = datos.data;
-    const blancos = [0, 1, 2].map(canal => {
-        const hist = new Array(256).fill(0);
-        for (let i = canal; i < p.length; i += 16) hist[p[i]]++;
-        const total = hist.reduce((a, b) => a + b, 0);
-        let acum = 0;
-        for (let v = 0; v < 256; v++) {
-            acum += hist[v];
-            if (acum >= total * 0.9) return Math.max(v, 1);
+// Valor por debajo del cual queda el 90 % de los puntos (sirve para hallar el color del papel)
+function percentil(hist, total, q) {
+    let acum = 0;
+    for (let v = 0; v < 256; v++) {
+        acum += hist[v];
+        if (acum >= total * q) return v;
+    }
+    return 255;
+}
+
+// Superficie suave que mejor pasa por varios puntos: a0 + a1·x + a2·y + a3·x² + a4·x·y + a5·y²
+function ajustarSuperficie(puntos, valorDe) {
+    if (puntos.length < 6) return null;
+    const M = Array.from({ length: 6 }, () => new Array(7).fill(0));
+    for (const pt of puntos) {
+        const t = [1, pt.x, pt.y, pt.x * pt.x, pt.x * pt.y, pt.y * pt.y];
+        const v = valorDe(pt);
+        for (let i = 0; i < 6; i++) {
+            for (let j = 0; j < 6; j++) M[i][j] += t[i] * t[j];
+            M[i][6] += t[i] * v;
         }
-        return 255;
-    });
-    for (let i = 0; i < p.length; i += 4) {
+    }
+    for (let col = 0; col < 6; col++) {
+        let piv = col;
+        for (let r = col + 1; r < 6; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+        if (Math.abs(M[piv][col]) < 1e-9) return null;
+        [M[col], M[piv]] = [M[piv], M[col]];
+        for (let r = 0; r < 6; r++) {
+            if (r === col) continue;
+            const factor = M[r][col] / M[col][col];
+            for (let k = col; k < 7; k++) M[r][k] -= factor * M[col][k];
+        }
+    }
+    return M.map((fila, i) => fila[6] / fila[i]);
+}
+const evaluarSuperficie = (a, x, y) => a[0] + a[1] * x + a[2] * y + a[3] * x * x + a[4] * x * y + a[5] * y * y;
+
+// Mapa de la luz sobre el papel: divide la hoja en cuadritos, mide el papel en cada uno
+// y arma una superficie suave (una por cada color: rojo, verde y azul)
+function fondoDelPapel(c) {
+    const { canvas: chico } = copiaReducida(c, 400);
+    const w = chico.width, h = chico.height;
+    const p = chico.getContext('2d').getImageData(0, 0, w, h).data;
+    liberar(chico);
+    const lado = 16; // cuadritos de 16 px (unos 9 mm de la hoja)
+    const celdas = [];
+    const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    for (let y0 = 0; y0 < h; y0 += lado) {
+        for (let x0 = 0; x0 < w; x0 += lado) {
+            const x1 = Math.min(w, x0 + lado), y1 = Math.min(h, y0 + lado);
+            hist.forEach(hh => hh.fill(0));
+            let n = 0;
+            for (let y = y0; y < y1; y++) {
+                for (let x = x0; x < x1; x++) {
+                    const i = (y * w + x) * 4;
+                    hist[0][p[i]]++; hist[1][p[i + 1]]++; hist[2][p[i + 2]]++;
+                    n++;
+                }
+            }
+            if (n < 30) continue; // pedacito del borde, muy pequeño
+            const color = hist.map(hh => percentil(hh, n, 0.9));
+            celdas.push({ x: (x0 + x1) / 2 / w, y: (y0 + y1) / 2 / h, color, luz: (color[0] + color[1] + color[2]) / 3 });
+        }
+    }
+
+    // Plan B: un solo color de papel para toda la hoja (como antes)
+    const constante = k => {
+        const v = celdas.map(cel => cel.color[k]).sort((a, b) => a - b);
+        return [v.length ? Math.max(1, v[Math.floor(v.length * 0.9)]) : 255, 0, 0, 0, 0, 0];
+    };
+
+    // 1. Fuera lo que claramente no es papel (fotos, bloques oscuros, mesa en el borde)
+    const luces = celdas.map(cel => cel.luz).sort((a, b) => a - b);
+    const tope = luces.length ? luces[Math.floor(luces.length * 0.9)] : 255;
+    let papel = celdas.filter(cel => cel.luz > tope * 0.5);
+
+    // 2. Primera superficie; fuera lo que queda muy por debajo de ella
+    const sup = ajustarSuperficie(papel, cel => cel.luz);
+    if (sup) {
+        const filtradas = papel.filter(cel => cel.luz >= evaluarSuperficie(sup, cel.x, cel.y) * 0.75);
+        if (filtradas.length >= 12) papel = filtradas;
+    }
+    if (papel.length < 12) return [0, 1, 2].map(constante);
+    return [0, 1, 2].map(k => ajustarSuperficie(papel, cel => cel.color[k]) || constante(k));
+}
+
+// Color: empareja la luz de la hoja (quita sombras y el tono amarillo) y deja el papel blanco
+function blanquearColor(ctx, c) {
+    const fondo = fondoDelPapel(c);
+    const W = c.width, H = c.height;
+    const datos = ctx.getImageData(0, 0, W, H);
+    const p = datos.data;
+    const xs = new Float32Array(W), xs2 = new Float32Array(W);
+    for (let x = 0; x < W; x++) { xs[x] = (x + 0.5) / W; xs2[x] = xs[x] * xs[x]; }
+    const fA = [0, 0, 0], fB = [0, 0, 0], fC = [0, 0, 0];
+    for (let y = 0; y < H; y++) {
+        const v = (y + 0.5) / H;
         for (let k = 0; k < 3; k++) {
-            const v = p[i + k] * 255 / blancos[k];
-            p[i + k] = (v - 128) * 1.15 + 128;
+            const a = fondo[k];
+            fA[k] = a[0] + a[2] * v + a[5] * v * v;
+            fB[k] = a[1] + a[4] * v;
+            fC[k] = a[3];
+        }
+        let i = y * W * 4;
+        for (let x = 0; x < W; x++, i += 4) {
+            for (let k = 0; k < 3; k++) {
+                const papel = Math.min(255, Math.max(60, fA[k] + fB[k] * xs[x] + fC[k] * xs2[x]));
+                const valor = p[i + k] * 255 / papel;
+                p[i + k] = CURVA_COLOR[valor >= 255 ? 255 : valor | 0];
+            }
         }
     }
     ctx.putImageData(datos, 0, 0);
 }
 
-// B/N: quita sombras y deja fondo blanco con texto negro
+// B/N: quita el granito y las sombras, afila y deja fondo blanco con letras bien negras
+// (también lo usa el lector de texto y de cédula)
 function blancoNegro(canvas) {
     if (!opencvListo) { // versión simple si OpenCV no cargó
         const ctx = canvas.getContext('2d');
@@ -1150,17 +1266,34 @@ function blancoNegro(canvas) {
         return;
     }
     const src = cv.imread(canvas);
-    const gris = new cv.Mat(), fondo = new cv.Mat(), dif = new cv.Mat();
+    const gris = new cv.Mat(), chico = new cv.Mat(), fondo = new cv.Mat(), borroso = new cv.Mat();
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
     cv.cvtColor(src, gris, cv.COLOR_RGBA2GRAY);
-    const k = cv.Mat.ones(11, 11, cv.CV_8U);
-    cv.dilate(gris, fondo, k);        // borra el texto y deja solo el fondo
-    cv.medianBlur(fondo, fondo, 31);  // suaviza las sombras
-    cv.absdiff(gris, fondo, dif);     // el texto es la diferencia con el fondo
-    cv.bitwise_not(dif, dif);         // fondo blanco, texto oscuro
-    cv.normalize(dif, dif, 0, 255, cv.NORM_MINMAX);
-    dif.convertTo(dif, -1, 1.4, -102); // más contraste
-    cv.imshow(canvas, dif);
-    [src, gris, fondo, dif, k].forEach(m => m.delete());
+    cv.GaussianBlur(gris, gris, new cv.Size(3, 3), 0.8); // quita el granito de la foto
+
+    // Fondo (papel y sombras) en una copia 4 veces más pequeña: más rápido y más suave
+    const ancho = Math.max(1, Math.round(gris.cols / 4)), alto = Math.max(1, Math.round(gris.rows / 4));
+    cv.resize(gris, chico, new cv.Size(ancho, alto), 0, 0, cv.INTER_AREA);
+    cv.dilate(chico, chico, k);      // borra las letras y deja solo el papel
+    cv.medianBlur(chico, chico, 9);  // suaviza las sombras
+    cv.resize(chico, fondo, new cv.Size(gris.cols, gris.rows), 0, 0, cv.INTER_LINEAR);
+
+    // Dividir por el fondo: el papel queda blanco parejo, con o sin sombra
+    const d = gris.data, f = fondo.data;
+    for (let i = 0; i < d.length; i++) {
+        const v = d[i] * 255 / (f[i] || 1);
+        d[i] = v > 255 ? 255 : v;
+    }
+
+    // Afilar las letras
+    cv.GaussianBlur(gris, borroso, new cv.Size(0, 0), 1.2);
+    cv.addWeighted(gris, 1.8, borroso, -0.8, 0, gris);
+
+    // Contraste final: papel blanco puro y letras bien negras
+    const g = gris.data;
+    for (let i = 0; i < g.length; i++) g[i] = CURVA_BN[g[i]];
+    cv.imshow(canvas, gris);
+    [src, gris, chico, fondo, borroso, k].forEach(m => m.delete());
 }
 
 // Marca en pantalla el filtro elegido
@@ -1190,34 +1323,35 @@ document.querySelectorAll('.modo').forEach(boton => {
 });
 
 // ---------- 9. Mostrar, ordenar, girar y borrar páginas ----------
- function mostrarPaginas() {
-  // Quitar de la selección las páginas que ya no existen
-  seleccionadas.forEach(id => { if (!paginas.some(p => p.id === id)) seleccionadas.delete(id); });
-  if (modoSeleccion && !paginas.length) modoSeleccion = false;
+function mostrarPaginas() {
+    // Quitar de la selección las páginas que ya no existen
+    seleccionadas.forEach(id => { if (!paginas.some(p => p.id === id)) seleccionadas.delete(id); });
+    if (modoSeleccion && !paginas.length) modoSeleccion = false;
 
-  const contenedor = document.getElementById('paginas');
-  contenedor.innerHTML = '';
-  paginas.forEach((pag, i) => {
-    const marcada = seleccionadas.has(pag.id);
-    const d = document.createElement('div');
-    d.className = 'pagina' + (marcada ? ' marcada' : '');
-    d.innerHTML = `<img src="${pag.finalURL}" alt="Página ${i + 1}" draggable="false"><span>${i + 1}</span>` +
-      (pag.formato ? `<small>${pag.formato}</small>` : '') +
-      (modoSeleccion ? `<div class="check">${marcada ? '<svg class="ic"><use href="#i-check"/></svg>' : ''}</div>` : '');
-    d.onclick = () => (modoSeleccion ? alternarSeleccion(pag.id) : abrirMenuPagina(i));
-    // Mantener presionada: entra en modo selección
-    d.oncontextmenu = e => { e.preventDefault(); if (!modoSeleccion) entrarSeleccion(pag.id); };
-    contenedor.appendChild(d);
-  });
-  const n = paginas.length;
-  document.getElementById('vacio').style.display = n ? 'none' : 'block';
-  document.getElementById('ayudaPaginas').style.display = n && !modoSeleccion ? 'block' : 'none';
-  document.getElementById('pdf').disabled = n === 0;
-  document.getElementById('pdfCuenta').textContent = n ? `(${n})` : '';
-  document.getElementById('textoBtn').disabled = n === 0;
-  document.getElementById('nuevo').disabled = n === 0;
-  actualizarCabecera();
-  actualizarBarraSeleccion();
+    const contenedor = document.getElementById('paginas');
+    contenedor.innerHTML = '';
+    paginas.forEach((pag, i) => {
+        const marcada = seleccionadas.has(pag.id);
+        const d = document.createElement('div');
+        d.className = 'pagina' + (marcada ? ' marcada' : '');
+        d.innerHTML = `<img src="${pag.finalURL}" alt="Página ${i + 1}" draggable="false"><span>${i + 1}</span>` +
+            (pag.formato ? `<small>${pag.formato}</small>` : '') +
+            (pag.borrosa ? '<div class="marcaBorrosa"><svg class="ic"><use href="#i-alerta"/></svg>Borrosa</div>' : '') +
+            (modoSeleccion ? `<div class="check">${marcada ? '<svg class="ic"><use href="#i-check"/></svg>' : ''}</div>` : '');
+        d.onclick = () => (modoSeleccion ? alternarSeleccion(pag.id) : abrirMenuPagina(i));
+        // Mantener presionada: entra en modo selección
+        d.oncontextmenu = e => { e.preventDefault(); if (!modoSeleccion) entrarSeleccion(pag.id); };
+        contenedor.appendChild(d);
+    });
+    const n = paginas.length;
+    document.getElementById('vacio').style.display = n ? 'none' : 'block';
+    document.getElementById('ayudaPaginas').style.display = n && !modoSeleccion ? 'block' : 'none';
+    document.getElementById('pdf').disabled = n === 0;
+    document.getElementById('pdfCuenta').textContent = n ? `(${n})` : '';
+    document.getElementById('textoBtn').disabled = n === 0;
+    document.getElementById('nuevo').disabled = n === 0;
+    actualizarCabecera();
+    actualizarBarraSeleccion();
 }
 
 function moverPagina(i, direccion) {
@@ -1265,6 +1399,7 @@ async function editarPagina(i) {
         if (esquinas) {
             await mostrarCargando(true);
             pag.esquinas = esquinas;
+            if (pag.borrosa) pag.borrosa = medirNitidez(base, esquinas) < UMBRAL_NITIDEZ; // 2.3.1
             await procesarPagina(pag, base); // mantiene el giro que tenía
             mostrarPaginas();
             respaldarPagina(pag);
@@ -2633,50 +2768,50 @@ let modoSeleccion = false;
 const seleccionadas = new Set(); // ids de las páginas marcadas
 
 function entrarSeleccion(id) {
-  modoSeleccion = true;
-  seleccionadas.clear();
-  seleccionadas.add(id);
-  if (navigator.vibrate) navigator.vibrate(30); // pequeña vibración, como en las apps
-  mostrarPaginas();
+    modoSeleccion = true;
+    seleccionadas.clear();
+    seleccionadas.add(id);
+    if (navigator.vibrate) navigator.vibrate(30); // pequeña vibración, como en las apps
+    mostrarPaginas();
 }
 function salirSeleccion() {
-  modoSeleccion = false;
-  seleccionadas.clear();
-  mostrarPaginas();
+    modoSeleccion = false;
+    seleccionadas.clear();
+    mostrarPaginas();
 }
 function alternarSeleccion(id) {
-  if (seleccionadas.has(id)) seleccionadas.delete(id); else seleccionadas.add(id);
-  if (!seleccionadas.size) { salirSeleccion(); return; }
-  mostrarPaginas();
+    if (seleccionadas.has(id)) seleccionadas.delete(id); else seleccionadas.add(id);
+    if (!seleccionadas.size) { salirSeleccion(); return; }
+    mostrarPaginas();
 }
 function actualizarBarraSeleccion() {
-  document.body.classList.toggle('seleccionando', modoSeleccion);
-  const n = seleccionadas.size;
-  document.getElementById('selCuenta').textContent = `${n} ${n === 1 ? 'seleccionada' : 'seleccionadas'}`;
-  document.getElementById('selTodas').textContent = n === paginas.length ? 'Ninguna' : 'Todas';
+    document.body.classList.toggle('seleccionando', modoSeleccion);
+    const n = seleccionadas.size;
+    document.getElementById('selCuenta').textContent = `${n} ${n === 1 ? 'seleccionada' : 'seleccionadas'}`;
+    document.getElementById('selTodas').textContent = n === paginas.length ? 'Ninguna' : 'Todas';
 }
 document.getElementById('selCancelar').addEventListener('click', salirSeleccion);
 document.getElementById('selTodas').addEventListener('click', () => {
-  if (seleccionadas.size === paginas.length) { salirSeleccion(); return; }
-  paginas.forEach(p => seleccionadas.add(p.id));
-  mostrarPaginas();
+    if (seleccionadas.size === paginas.length) { salirSeleccion(); return; }
+    paginas.forEach(p => seleccionadas.add(p.id));
+    mostrarPaginas();
 });
 document.getElementById('selBorrar').addEventListener('click', () => {
-  const n = seleccionadas.size;
-  if (!n || !confirm(`¿Borrar ${n} ${n === 1 ? 'página' : 'páginas'}?`)) return;
-  for (let i = paginas.length - 1; i >= 0; i--) {
-    const p = paginas[i];
-    if (seleccionadas.has(p.id)) {
-      URL.revokeObjectURL(p.finalURL);
-      paginas.splice(i, 1);
-      quitarPaginaRespaldo(p.id);
+    const n = seleccionadas.size;
+    if (!n || !confirm(`¿Borrar ${n} ${n === 1 ? 'página' : 'páginas'}?`)) return;
+    for (let i = paginas.length - 1; i >= 0; i--) {
+        const p = paginas[i];
+        if (seleccionadas.has(p.id)) {
+            URL.revokeObjectURL(p.finalURL);
+            paginas.splice(i, 1);
+            quitarPaginaRespaldo(p.id);
+        }
     }
-  }
-  modoSeleccion = false;
-  seleccionadas.clear();
-  mostrarPaginas();
-  respaldarSesion();
-  estado.textContent = `✅ Se borraron ${n} ${n === 1 ? 'página' : 'páginas'}`;
+    modoSeleccion = false;
+    seleccionadas.clear();
+    mostrarPaginas();
+    respaldarSesion();
+    estado.textContent = `✅ Se borraron ${n} ${n === 1 ? 'página' : 'páginas'}`;
 });
 
 // ---------- 15b. Diseño 2.0: cabecera, menús y avisos flotantes ----------
