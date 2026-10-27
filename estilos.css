@@ -368,3 +368,14 @@ body.seleccionando .barra { display: none; }
 #nuevaVersion .ic { color: #81c995; }
 #nuevaVersionBtn { border: none; border-radius: 10px; padding: 10px 14px; min-height: 44px;
                    font-size: 15px; font-weight: bold; background: var(--azul); color: white; }
+
+     /* ---------- Ventana propia: preguntas y avisos (2.4.1) ---------- */
+#ventana { z-index: 55; }
+#ventana .veCabeza { display: flex; align-items: center; gap: 10px; margin: 4px 2px 2px; }
+#ventana .veCabeza .ic { width: 26px; height: 26px; color: #188038; }
+#ventana.alerta .veCabeza .ic { color: #e37400; }
+#veTitulo { font-size: 17px; color: var(--marino); line-height: 1.35; }
+#ventana #veMensaje { text-align: left; color: #444; font-size: 15px; line-height: 1.5;
+                      white-space: pre-line; margin: 0 2px 6px; }
+#ventana #veSi { justify-content: center; font-weight: bold; background: var(--modo); color: white; }
+#ventana #veSi.peligro { background: #d93025; color: white; }              

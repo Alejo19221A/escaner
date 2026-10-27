@@ -4,7 +4,7 @@
 // Si no se cambia, los celulares NO reciben la versión nueva.
 // LIBRERIAS solo se cambia si se reemplaza o se agrega una librería en libs/.
 // =====================================================================
-const VERSION = '2.4';
+const VERSION = '2.4.1';
 const LIBRERIAS = '1';
 const CACHE_APP = `escaner-app-${VERSION}`;
 const CACHE_LIBS = `escaner-libs-${LIBRERIAS}`;

@@ -1,4 +1,4 @@
-const VERSION = '2.4';
+const VERSION = '2.4.1';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -24,6 +24,54 @@ console.error = (...args) => {
 window.addEventListener('error', e => anotarError(e.message));
 window.addEventListener('unhandledrejection', e =>
     anotarError(e.reason && e.reason.message ? e.reason.message : e.reason));
+
+// ---------- 0b. Ventana propia (2.4.1): reemplaza las ventanas grises de Chrome ----------
+// Va al inicio porque se usa en muchas partes del código
+let colaVentanas = Promise.resolve(); // si llegan varias, se muestran una después de otra
+
+function abrirVentana({ titulo = '', mensaje = '', si = 'Aceptar', no = '', peligro = false, alerta = false }) {
+    const tarea = colaVentanas.then(() => new Promise(resolve => {
+        const capa = document.getElementById('ventana');
+        const btnSi = document.getElementById('veSi');
+        const btnNo = document.getElementById('veNo');
+        const texto = document.getElementById('veMensaje');
+        document.getElementById('veTitulo').textContent = titulo;
+        texto.textContent = mensaje;
+        texto.style.display = mensaje ? '' : 'none';
+        document.getElementById('veIcono').setAttribute('href', alerta ? '#i-alerta' : '#i-ok');
+        capa.classList.toggle('alerta', alerta);
+        btnSi.textContent = si;
+        btnSi.classList.toggle('peligro', peligro);
+        btnNo.textContent = no;
+        btnNo.style.display = no ? '' : 'none';
+        capa.classList.add('visible');
+        capa.onclick = e => {
+            let respuesta;
+            if (btnSi.contains(e.target)) respuesta = true;
+            else if (btnNo.contains(e.target) || e.target === capa) respuesta = false;
+            else return;
+            capa.classList.remove('visible');
+            capa.onclick = null;
+            resolve(respuesta);
+        };
+    }));
+    colaVentanas = tarea.catch(() => { });
+    return tarea;
+}
+
+// Pregunta con dos botones: devuelve true (sí) o false (no)
+function preguntar(titulo, si, no, opciones = {}) {
+    return abrirVentana({ titulo, si, no, ...opciones });
+}
+
+// Los avisos (alert) usan la ventana propia: sin emoji, con ícono verde o amarillo
+window.alert = mensaje => {
+    const texto = String(mensaje).trim();
+    const bueno = /^(✅|📥|📋)/u.test(texto);
+    const limpio = texto.replace(/^[^\p{L}\p{N}¿¡]+/u, '');
+    const [titulo, ...resto] = limpio.split('\n');
+    abrirVentana({ titulo, mensaje: resto.join('\n').trim(), si: 'Entendido', alerta: !bueno });
+};
 
 // Cada página: { id, baseBlob, esquinas, giro, recBlob, finalBlob, finalURL, ancho, alto, formato,
 //                lectura, datosDlg, ocrPromesa, ocrResultado, ocrListo, ocrHTML }
@@ -1431,8 +1479,9 @@ function empezarDeNuevo() {
     estado.textContent = '✅ Listo para escanear';
 }
 
-document.getElementById('nuevo').addEventListener('click', () => {
-    if (confirm('¿Borrar todas las páginas y empezar un documento nuevo?')) empezarDeNuevo();
+document.getElementById('nuevo').addEventListener('click', async () => {
+    if (await preguntar('¿Borrar todas las páginas y empezar un documento nuevo?', 'Borrar todo', 'Cancelar',
+        { peligro: true, alerta: true })) empezarDeNuevo();
 });
 
 async function mostrarCargando(visible) {
@@ -1891,8 +1940,8 @@ function terminar(mensaje) {
     respaldoActivo = false;
     borrarRespaldo();
     estado.textContent = mensaje;
-    setTimeout(() => {
-        if (confirm('Documento listo ✅\n¿Empezar un documento nuevo?')) empezarDeNuevo();
+    setTimeout(async () => {
+        if (await preguntar('Documento listo', 'Empezar uno nuevo', 'Seguir con estas páginas')) empezarDeNuevo();
     }, 300);
 }
 
@@ -2798,9 +2847,10 @@ document.getElementById('selTodas').addEventListener('click', () => {
     paginas.forEach(p => seleccionadas.add(p.id));
     mostrarPaginas();
 });
-document.getElementById('selBorrar').addEventListener('click', () => {
+document.getElementById('selBorrar').addEventListener('click', async () => {
     const n = seleccionadas.size;
-    if (!n || !confirm(`¿Borrar ${n} ${n === 1 ? 'página' : 'páginas'}?`)) return;
+    if (!n || !(await preguntar(`¿Borrar ${n} ${n === 1 ? 'página' : 'páginas'}?`, 'Borrar', 'Cancelar',
+        { peligro: true, alerta: true }))) return;
     for (let i = paginas.length - 1; i >= 0; i--) {
         const p = paginas[i];
         if (seleccionadas.has(p.id)) {
@@ -2857,7 +2907,10 @@ hoja.addEventListener('click', e => {
     if (accion === 'seleccionar') entrarSeleccion(paginas[i].id);
     if (accion === 'antes') moverPagina(i, -1);
     if (accion === 'despues') moverPagina(i, 1);
-    if (accion === 'borrar' && confirm(`¿Borrar la página ${i + 1}?`)) borrarPagina(i);
+    if (accion === 'borrar') {
+        preguntar(`¿Borrar la página ${i + 1}?`, 'Borrar', 'Cancelar', { peligro: true, alerta: true })
+            .then(si => { if (si && paginas[i]) borrarPagina(i); });
+    }
 });
 
 // Menú "Más": Empezar de nuevo, Reportar problema y versión
