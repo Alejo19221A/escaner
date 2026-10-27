@@ -352,8 +352,19 @@ body.seleccionando .barra { display: none; }
 #barraSel #selCancelar { padding: 10px; }
 #barraSel .peligro { background: #fce8e6; color: #d93025; }
 
-/* ---------- Foto borrosa (2.3.1) ---------- */
+/* ---------- Foto borrosa (2.4) ---------- */
 .marcaBorrosa { position: absolute; top: 38px; left: 10px; display: flex; align-items: center; gap: 4px;
                 background: #fbbc04; color: #202124; font-size: 12px; font-weight: bold;
                 padding: 2px 8px 2px 6px; border-radius: 6px; }
 .marcaBorrosa .ic { width: 14px; height: 14px; stroke-width: 2.4; }
+
+/* ---------- Aviso de versión nueva (2.4) ---------- */
+#nuevaVersion { display: none; position: fixed; left: 12px; right: 12px;
+                bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 22;
+                align-items: center; gap: 10px; padding: 10px 10px 10px 14px; border-radius: 14px;
+                background: #202124; color: white; font-size: 14px; box-shadow: 0 4px 14px #0005; }
+#nuevaVersion.visible { display: flex; }
+#nuevaVersion span { flex: 1; }
+#nuevaVersion .ic { color: #81c995; }
+#nuevaVersionBtn { border: none; border-radius: 10px; padding: 10px 14px; min-height: 44px;
+                   font-size: 15px; font-weight: bold; background: var(--azul); color: white; }

@@ -1,41 +1,113 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>Escáner</title>
+  <meta name="theme-color" content="#1a3d6d">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="iconos/favicon-32.png">
   <link rel="stylesheet" href="estilos.css?v=2.3">
   <script src="libs/jspdf.umd.min.js"></script>
   <script src="libs/jszip.min.js"></script>
   <script src="libs/tesseract/tesseract.min.js"></script>
   <script async src="libs/opencv.js"></script>
 </head>
+
 <body>
   <!-- Iconos de línea (dibujados aquí: funcionan sin internet) -->
   <svg style="display:none" aria-hidden="true">
-    <symbol id="i-camara" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></symbol>
-    <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></symbol>
-    <symbol id="i-texto" viewBox="0 0 24 24"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></symbol>
-    <symbol id="i-galeria" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
-    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
-    <symbol id="i-cambiar" viewBox="0 0 24 24"><path d="M7 7h12l-3-3"/><path d="M17 17H5l3 3"/></symbol>
-    <symbol id="i-recorte" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
-    <symbol id="i-girar" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
-    <symbol id="i-izq" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
-    <symbol id="i-der" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
-    <symbol id="i-borrar" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></symbol>
-    <symbol id="i-reporte" viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4.5L17 13H5"/></symbol>
-    <symbol id="i-escanear" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></symbol>
-    <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
-    <symbol id="i-alerta" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></symbol>
-    <symbol id="i-historial" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-    <symbol id="i-usuario" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
-    <symbol id="i-compartir" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
-    <symbol id="i-cerrar" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
-    <symbol id="i-mas" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-    <symbol id="i-menos" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
-    <symbol id="i-ajustar" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></symbol>
+    <symbol id="i-camara" viewBox="0 0 24 24">
+      <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </symbol>
+    <symbol id="i-pdf" viewBox="0 0 24 24">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6M9 17h4" />
+    </symbol>
+    <symbol id="i-texto" viewBox="0 0 24 24">
+      <path d="M5 7V5h14v2" />
+      <path d="M12 5v14" />
+      <path d="M9 19h6" />
+    </symbol>
+    <symbol id="i-galeria" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="2" />
+      <path d="M21 16l-5-5-9 9" />
+    </symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24">
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </symbol>
+    <symbol id="i-cambiar" viewBox="0 0 24 24">
+      <path d="M7 7h12l-3-3" />
+      <path d="M17 17H5l3 3" />
+    </symbol>
+    <symbol id="i-recorte" viewBox="0 0 24 24">
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M2 6h14a2 2 0 0 1 2 2v14" />
+    </symbol>
+    <symbol id="i-girar" viewBox="0 0 24 24">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+      <path d="M20 5v6h-6" />
+    </symbol>
+    <symbol id="i-izq" viewBox="0 0 24 24">
+      <path d="M15 6l-6 6 6 6" />
+    </symbol>
+    <symbol id="i-der" viewBox="0 0 24 24">
+      <path d="M9 6l6 6-6 6" />
+    </symbol>
+    <symbol id="i-borrar" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+      <path d="M9 7V4h6v3" />
+    </symbol>
+    <symbol id="i-reporte" viewBox="0 0 24 24">
+      <path d="M5 21V4" />
+      <path d="M5 4h12l-2.5 4.5L17 13H5" />
+    </symbol>
+    <symbol id="i-escanear" viewBox="0 0 24 24">
+      <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+      <path d="M8 9h8M8 12h8M8 15h5" />
+    </symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12l3 3 5-6" />
+    </symbol>
+    <symbol id="i-alerta" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v6M12 16.5v.5" />
+    </symbol>
+    <symbol id="i-historial" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </symbol>
+    <symbol id="i-usuario" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21a8 8 0 0 1 16 0" />
+    </symbol>
+    <symbol id="i-compartir" viewBox="0 0 24 24">
+      <path d="M12 3v12" />
+      <path d="M8 7l4-4 4 4" />
+      <path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+    </symbol>
+    <symbol id="i-cerrar" viewBox="0 0 24 24">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </symbol>
+    <symbol id="i-mas" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14" />
+    </symbol>
+    <symbol id="i-menos" viewBox="0 0 24 24">
+      <path d="M5 12h14" />
+    </symbol>
+    <symbol id="i-ajustar" viewBox="0 0 24 24">
+      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M5 12l5 5 9-10" />
+    </symbol>
   </svg>
 
   <!-- Cabecera: nombre y modo (tocar para cambiar) -->
@@ -46,7 +118,17 @@
 
   <!-- Aviso flotante: app.js escribe en #estado y se muestra en #aviso -->
   <p id="estado"></p>
-  <div id="aviso"><svg class="ic"><use id="avisoIcono" href="#i-ok"/></svg><span id="avisoTexto"></span></div>
+  <div id="aviso"><svg class="ic">
+      <use id="avisoIcono" href="#i-ok" />
+    </svg><span id="avisoTexto"></span></div>
+  <!-- Aviso de versión nueva (2.4) -->
+  <div id="nuevaVersion">
+    <svg class="ic">
+      <use href="#i-girar" />
+    </svg>
+    <span>Hay una versión nueva de la app</span>
+    <button id="nuevaVersionBtn">Actualizar</button>
+  </div>
 
   <main>
     <div class="modos">
@@ -57,56 +139,84 @@
 
     <!-- Se ve cuando no hay páginas -->
     <div id="vacio">
-      <svg class="ic vacioIcono"><use href="#i-escanear"/></svg>
+      <svg class="ic vacioIcono">
+        <use href="#i-escanear" />
+      </svg>
       <p class="vacioTitulo">Toca la cámara para escanear</p>
       <p class="vacioAyuda">Consejo: pon la hoja sobre un fondo oscuro para que el recorte salga mejor.</p>
     </div>
 
     <div id="paginas"></div>
-      <p id="ayudaPaginas">Toca una página para ajustarla · mantenla presionada para seleccionar varias</p>
+    <p id="ayudaPaginas">Toca una página para ajustarla · mantenla presionada para seleccionar varias</p>
   </main>
 
   <!-- Barra de abajo -->
   <nav class="barra">
     <button class="barraBtn" id="pdf" disabled>
-      <svg class="ic"><use href="#i-pdf"/></svg><span>PDF <span id="pdfCuenta"></span></span>
+      <svg class="ic">
+        <use href="#i-pdf" />
+      </svg><span>PDF <span id="pdfCuenta"></span></span>
     </button>
     <button class="barraBtn" id="textoBtn" disabled>
-      <svg class="ic"><use href="#i-texto"/></svg><span>Texto</span>
+      <svg class="ic">
+        <use href="#i-texto" />
+      </svg><span>Texto</span>
     </button>
     <label class="camara" aria-label="Escanear">
-      <svg class="ic"><use href="#i-camara"/></svg>
+      <svg class="ic">
+        <use href="#i-camara" />
+      </svg>
       <input type="file" accept="image/*" capture="environment" class="entradaFoto" hidden>
     </label>
     <label class="barraBtn">
-      <svg class="ic"><use href="#i-galeria"/></svg><span>Galería</span>
-            <input type="file" accept="image/*" class="entradaFoto" multiple hidden>
+      <svg class="ic">
+        <use href="#i-galeria" />
+      </svg><span>Galería</span>
+      <input type="file" accept="image/*" class="entradaFoto" multiple hidden>
     </label>
     <button class="barraBtn" id="masBtn">
-      <svg class="ic"><use href="#i-menu"/></svg><span>Más</span>
+      <svg class="ic">
+        <use href="#i-menu" />
+      </svg><span>Más</span>
     </button>
   </nav>
 
   <!-- Barra de selección (al mantener presionada una página) -->
   <div id="barraSel">
-    <button id="selCancelar" aria-label="Cancelar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+    <button id="selCancelar" aria-label="Cancelar"><svg class="ic">
+        <use href="#i-cerrar" />
+      </svg></button>
     <span id="selCuenta">0 seleccionadas</span>
     <button id="selTodas">Todas</button>
-    <button id="selBorrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar</button>
+    <button id="selBorrar" class="peligro"><svg class="ic">
+        <use href="#i-borrar" />
+      </svg>Borrar</button>
   </div>
 
   <!-- Menú de una página (al tocar una miniatura) -->
   <div id="hoja" class="capaHoja">
     <div class="hojaCaja">
       <p id="hojaTitulo">Página</p>
-      <button data-accion="recorte"><svg class="ic"><use href="#i-recorte"/></svg>Ajustar recorte</button>
-      <button data-accion="girar"><svg class="ic"><use href="#i-girar"/></svg>Girar</button>
-      <button data-accion="seleccionar"><svg class="ic"><use href="#i-check"/></svg>Seleccionar varias</button>
+      <button data-accion="recorte"><svg class="ic">
+          <use href="#i-recorte" />
+        </svg>Ajustar recorte</button>
+      <button data-accion="girar"><svg class="ic">
+          <use href="#i-girar" />
+        </svg>Girar</button>
+      <button data-accion="seleccionar"><svg class="ic">
+          <use href="#i-check" />
+        </svg>Seleccionar varias</button>
       <div class="hojaFila">
-        <button data-accion="antes"><svg class="ic"><use href="#i-izq"/></svg>Mover antes</button>
-        <button data-accion="despues">Mover después<svg class="ic"><use href="#i-der"/></svg></button>
+        <button data-accion="antes"><svg class="ic">
+            <use href="#i-izq" />
+          </svg>Mover antes</button>
+        <button data-accion="despues">Mover después<svg class="ic">
+            <use href="#i-der" />
+          </svg></button>
       </div>
-      <button data-accion="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar página</button>
+      <button data-accion="borrar" class="peligro"><svg class="ic">
+          <use href="#i-borrar" />
+        </svg>Borrar página</button>
       <button data-accion="cerrar" class="cerrarHoja">Cancelar</button>
     </div>
   </div>
@@ -114,13 +224,25 @@
   <!-- Menú "Más" -->
   <div id="menuMas" class="capaHoja">
     <div class="hojaCaja">
-      <button id="historialBtn"><svg class="ic"><use href="#i-historial"/></svg>Historial de envíos</button>
-      <button id="abrirPdfBtn"><svg class="ic"><use href="#i-pdf"/></svg>Abrir PDF</button>
+      <button id="historialBtn"><svg class="ic">
+          <use href="#i-historial" />
+        </svg>Historial de envíos</button>
+      <button id="abrirPdfBtn"><svg class="ic">
+          <use href="#i-pdf" />
+        </svg>Abrir PDF</button>
       <input type="file" accept="application/pdf" id="entradaPDF" hidden>
-      <button id="usuarioBtn"><svg class="ic"><use href="#i-usuario"/></svg><span id="usuarioTexto">Usuario</span></button>
-      <button id="destinoOpcionBtn"><svg class="ic"><use href="#i-compartir"/></svg><span id="destinoOpcionTexto">Preguntar destino al compartir: Sí</span></button>
-      <button id="reportar"><svg class="ic"><use href="#i-reporte"/></svg>Reportar problema</button>
-      <button id="nuevo" class="peligro" disabled><svg class="ic"><use href="#i-borrar"/></svg>Empezar de nuevo</button>
+      <button id="usuarioBtn"><svg class="ic">
+          <use href="#i-usuario" />
+        </svg><span id="usuarioTexto">Usuario</span></button>
+      <button id="destinoOpcionBtn"><svg class="ic">
+          <use href="#i-compartir" />
+        </svg><span id="destinoOpcionTexto">Preguntar destino al compartir: Sí</span></button>
+      <button id="reportar"><svg class="ic">
+          <use href="#i-reporte" />
+        </svg>Reportar problema</button>
+      <button id="nuevo" class="peligro" disabled><svg class="ic">
+          <use href="#i-borrar" />
+        </svg>Empezar de nuevo</button>
       <button class="cerrarHoja">Cerrar</button>
       <p id="version"></p>
     </div>
@@ -191,7 +313,9 @@
     <!-- Paso 2: leyendo -->
     <div id="txLeyendo">
       <p id="txProgresoTexto">Leyendo...</p>
-      <div class="txBarra"><div id="txBarraRelleno"></div></div>
+      <div class="txBarra">
+        <div id="txBarraRelleno"></div>
+      </div>
       <button id="txDetener">Detener</button>
     </div>
 
@@ -209,7 +333,8 @@
         </div>
         <div id="txDivisor"></div>
         <div id="txTextoPanel">
-          <p class="txLeyenda"><span class="muestraDudosa">amarillo</span> = palabra dudosa · toca una palabra para verla en la foto · puedes corregir el texto</p>
+          <p class="txLeyenda"><span class="muestraDudosa">amarillo</span> = palabra dudosa · toca una palabra para
+            verla en la foto · puedes corregir el texto</p>
           <div id="txTexto" contenteditable="true" spellcheck="false"></div>
         </div>
       </div>
@@ -245,7 +370,9 @@
   <!-- Historial de envíos -->
   <div id="historialDlg">
     <div class="txCabecera">
-      <button id="hiCerrar" aria-label="Cerrar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+      <button id="hiCerrar" aria-label="Cerrar"><svg class="ic">
+          <use href="#i-cerrar" />
+        </svg></button>
       <span class="hiTitulo">Historial de envíos</span>
     </div>
     <div class="hiCuerpo">
@@ -268,19 +395,33 @@
   <!-- Vista previa de un PDF del historial -->
   <div id="visorDlg">
     <div class="txCabecera">
-      <button id="viCerrar" aria-label="Cerrar"><svg class="ic"><use href="#i-cerrar"/></svg></button>
+      <button id="viCerrar" aria-label="Cerrar"><svg class="ic">
+          <use href="#i-cerrar" />
+        </svg></button>
       <span class="hiTitulo" id="viTitulo"></span>
     </div>
     <div id="viPaginas"></div>
     <div class="viZoom">
-      <button id="viMas" aria-label="Acercar"><svg class="ic"><use href="#i-mas"/></svg></button>
-      <button id="viMenos" aria-label="Alejar"><svg class="ic"><use href="#i-menos"/></svg></button>
-      <button id="viAjustar" aria-label="Ver completo"><svg class="ic"><use href="#i-ajustar"/></svg></button>
+      <button id="viMas" aria-label="Acercar"><svg class="ic">
+          <use href="#i-mas" />
+        </svg></button>
+      <button id="viMenos" aria-label="Alejar"><svg class="ic">
+          <use href="#i-menos" />
+        </svg></button>
+      <button id="viAjustar" aria-label="Ver completo"><svg class="ic">
+          <use href="#i-ajustar" />
+        </svg></button>
     </div>
     <div class="viPie">
-      <button data-hacer="compartir"><svg class="ic"><use href="#i-compartir"/></svg>Reenviar</button>
-      <button data-hacer="guardar"><svg class="ic"><use href="#i-pdf"/></svg>Guardar</button>
-      <button data-hacer="borrar" class="peligro"><svg class="ic"><use href="#i-borrar"/></svg>Borrar</button>
+      <button data-hacer="compartir"><svg class="ic">
+          <use href="#i-compartir" />
+        </svg>Reenviar</button>
+      <button data-hacer="guardar"><svg class="ic">
+          <use href="#i-pdf" />
+        </svg>Guardar</button>
+      <button data-hacer="borrar" class="peligro"><svg class="ic">
+          <use href="#i-borrar" />
+        </svg>Borrar</button>
     </div>
   </div>
 
@@ -314,9 +455,12 @@
     </div>
   </div>
 
-  <div id="cargando"><div>Procesando...</div></div>
+  <div id="cargando">
+    <div>Procesando...</div>
+  </div>
 
-  <script src="app.js?v=2.3.1"></script>
-  <script src="historial.js?v=2.3.1"></script>
+  <script src="app.js?v=2.4"></script>
+  <script src="historial.js?v=2.4"></script>
 </body>
+
 </html>

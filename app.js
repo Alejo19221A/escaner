@@ -1,4 +1,4 @@
-const VERSION = '2.3.1';
+const VERSION = '2.4';
 const DPI = 200;               // calidad de cada hoja en el PDF (como un escáner de oficina)
 const UMBRAL_NITIDEZ = 40;     // menor = acepta fotos más borrosas (se puede ajustar)
 const MINUTOS_INACTIVIDAD = 10; // después de este tiempo sin uso, se borran las páginas
@@ -232,6 +232,8 @@ function borrarRespaldo() {
 // ---------- 2. Tipo de documento: normal o paciente (etiqueta de la cabecera) ----------
 function marcarTipo() {
     document.body.classList.toggle('modoPaciente', tipoDoc === 'paciente');
+    const barraCelular = document.querySelector('meta[name="theme-color"]');
+    if (barraCelular) barraCelular.setAttribute('content', tipoDoc === 'paciente' ? '#0f6e56' : '#1a3d6d');
     actualizarCabecera();
 }
 document.getElementById('modoBtn').addEventListener('click', () => {
@@ -2978,3 +2980,58 @@ async function recuperarTrabajo() {
 
 // Se revisa al abrir la app (va en la fila: si tomas una foto de inmediato, espera a que termine)
 enCola(recuperarTrabajo);
+
+// ---------- 17. App instalable y sin internet (PWA, 2.4) ----------
+// El service worker guarda la app en el celular para que abra sin internet.
+// En Live Server (computador) no se activa, para que los cambios se vean al instante.
+const nuevaVersion = document.getElementById('nuevaVersion');
+let swEsperando = null;
+
+function mostrarNuevaVersion(sw) {
+    swEsperando = sw;
+    nuevaVersion.classList.add('visible');
+}
+
+document.getElementById('nuevaVersionBtn').addEventListener('click', () => {
+    if (!swEsperando) return;
+    // Guardar lo último antes de recargar: el trabajo se recupera al abrir
+    if (txDlg.classList.contains('visible')) guardarEdicionTx();
+    respaldarSesion();
+    localStorage.setItem('ultimaActividad', String(Date.now()));
+    nuevaVersion.classList.remove('visible');
+    swEsperando.postMessage('actualizar');
+});
+
+const enComputadorLocal = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+if ('serviceWorker' in navigator && !enComputadorLocal) {
+    let recargando = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (recargando) return;
+        recargando = true;
+        location.reload();
+    });
+    navigator.serviceWorker.register('service-worker.js').then(reg => {
+        const revisar = () => {
+            if (reg.waiting && navigator.serviceWorker.controller) mostrarNuevaVersion(reg.waiting);
+        };
+        revisar();
+        reg.addEventListener('updatefound', () => {
+            const nuevo = reg.installing;
+            if (nuevo) nuevo.addEventListener('statechange', () => { if (nuevo.state === 'installed') revisar(); });
+        });
+        // Cada vez que se vuelve a la app, se revisa si hay versión nueva
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) reg.update().catch(() => { });
+        });
+    }).catch(err => console.error(err));
+}
+
+// Almacenamiento persistente: pide a Chrome que no borre el historial si el celular se llena
+if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persisted()
+        .then(ya => ya || navigator.storage.persist())
+        .then(ok => console.log('Almacenamiento persistente:', ok))
+        .catch(() => { });
+}
+
+
